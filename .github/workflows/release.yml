@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 校验 tag 与 package.json 版本一致
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PKG=$(node -p "require('./package.json').version")
+          if [ "v$PKG" != "$TAG" ]; then
+            echo "版本不一致: tag=$TAG package.json=v$PKG"
+            exit 1
+          fi
+          echo "版本一致: $TAG"
+      - name: 打包 linux 分发包
+        run: |
+          mkdir -p dist
+          VERSION=${GITHUB_REF#refs/tags/v}
+          zip -r "dist/multi-agent-bridge-dist-v${VERSION}-public-linux.zip" \
+            bridge config launchers scripts assets-optional docs public-install \
+            README.md README_EN.md LICENSE CHANGELOG.md AGENTS.md package.json \
+            -x "*.onnx" "*tokenizer.json" "node_modules/*"
+      - name: 打包 windows 分发包（同内容）
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          zip -r "dist/multi-agent-bridge-dist-v${VERSION}-public-win.zip" \
+            bridge config launchers scripts assets-optional docs public-install \
+            README.md README_EN.md LICENSE CHANGELOG.md AGENTS.md package.json \
+            -x "*.onnx" "*tokenizer.json" "node_modules/*"
+      - name: 上传 Release 资产
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "shared-context": {
+      "command": "node",
+      "args": ["${BRIDGE_DIR}/mcp/shared-context-server.mjs"],
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+        "ANTHROPIC_AUTH_TOKEN": "${ANTHROPIC_AUTH_TOKEN}",
+        "ANTHROPIC_MODEL": "claude-sonnet-4-20250514",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-20250514",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-20250514",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-20250514",
+        "BRIDGE_CONTROLLER": "claude"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "multi-agent-bridge-mcp",
+  "version": "1.0.0",
+  "description": "多Agent协作共享上下文桥接 MCP Server（零三方依赖核心，纯 node: 内建）",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node shared-context-server.mjs"
+  }
+}

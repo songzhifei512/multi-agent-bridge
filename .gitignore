@@ -1,0 +1,28 @@
+# 依赖与产物
+node_modules/
+*.log
+*.tsbuildinfo
+
+# 运行时状态（用户本地生成，不入库）
+.agents/
+.env
+.env.local
+*.local
+
+# 构建产物（本项目零依赖，但预防）
+dist/
+build/
+
+# 大文件分发物（走 GitHub Release，不入 git）
+*.zip
+assets-optional/model-multilingual/*.onnx
+assets-optional/model-multilingual/tokenizer.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 临时与清理报告
+*.redact-report.*

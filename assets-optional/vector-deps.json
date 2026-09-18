@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "feature": "vector-memory (optional)",
+  "note": "分发包【可选】向量记忆层依赖清单。v1.0.0 起 embedding 模型 model-multilingual/ 不再随仓库内置（避免 120MB 大文件入 git），改为按需下载：运行 assets-optional/download-vector-assets.{sh,ps1} 即可拉取。原生运行时 onnxruntime-node / sqlite-vec 仍需 npm install 补齐（或复用既有向量记忆运行时）。缺省时核心纯文本兜底，功能完整可用。",
+  "model": {
+    "name": "paraphrase-multilingual-MiniLM-L12-v2",
+    "dim": 384,
+    "files": ["model_quantized.onnx", "tokenizer.json", "config.json", "tokenizer_config.json"],
+    "deploy_target": "$HOME/.agents/vector/model-multilingual/  (install-*.sh/bat 自动部署)",
+    "download_script": "assets-optional/download-vector-assets.{sh,ps1}",
+    "default_source": "https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main",
+    "source_override_env": "VECTOR_MODEL_URL"
+  },
+  "npm_packages": [
+    {
+      "name": "onnxruntime-node",
+      "purpose": "文本 embedding 推理（余弦相似度检索的嵌入模型运行时）",
+      "install": "npm install onnxruntime-node",
+      "works_without_it": false
+    },
+    {
+      "name": "sqlite-vec",
+      "purpose": "sqlite-vec 的 JS 封装/WASM，或用系统原生 vec0.so/.dll",
+      "install": "npm install sqlite-vec",
+      "works_without_it": true,
+      "alt": "node:sqlite 原生扩展加载已有 vec0.dll/.so（见 probe-vector.mjs 检测）"
+    }
+  ],
+  "required_together": true,
+  "probe": "node scripts/probe-vector.mjs --json",
+  "platforms": {
+    "win32": {"vec0": "vec0.dll", "note": "npm 装的 onnxruntime-node 自带 win32 预编译"},
+    "linux": {"vec0": "vec0.so", "note": "特定 glibc 环境需 LD_PRELOAD librt（见 config/env.tmpl）"}
+  }
+}

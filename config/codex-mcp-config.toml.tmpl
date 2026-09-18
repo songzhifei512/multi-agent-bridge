@@ -1,0 +1,20 @@
+# shared-context MCP server注册（Codex CLI）—公网分发版模板。Windows/Linux通用。
+#由安装向导把 ${BRIDGE_DIR}等占位替换后，将块追加 ~/.codex/config.toml。
+#校验：codex mcp list
+#
+#注意：必须用单表 [mcp_servers.shared-context] + inline env = {...}。
+# codex0.146+不接受 [[...]]双表 + [mcp_servers.shared-context.env]子表形式。
+# Linux且需 glibc兼容时，在 env内加 LD_PRELOAD = "${LIBRT_PATH}"。
+
+[mcp_servers.shared-context]
+command = "node"
+args = ["${BRIDGE_DIR}/mcp/shared-context-server.mjs"]
+env = {
+  ANTHROPIC_BASE_URL = "https://api.anthropic.com",
+  ANTHROPIC_AUTH_TOKEN = "${ANTHROPIC_AUTH_TOKEN}",
+  ANTHROPIC_MODEL = "claude-sonnet-4-20250514",
+  ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-opus-4-20250514",
+  ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-sonnet-4-20250514",
+  ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-20250514",
+  BRIDGE_CONTROLLER = "codex"
+}

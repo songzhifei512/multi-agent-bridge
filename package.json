@@ -1,0 +1,41 @@
+{
+  "name": "multi-agent-bridge",
+  "version": "1.0.0",
+  "description": "跨 CLI 多 Agent 协作的共享上下文桥接 MCP Server（纯 Node stdlib，零三方依赖，57 个协作工具）",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/songzhifei512/multi-agent-bridge.git"
+  },
+  "homepage": "https://github.com/songzhifei512/multi-agent-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/songzhifei512/multi-agent-bridge/issues"
+  },
+  "keywords": [
+    "multi-agent",
+    "mcp",
+    "mcp-server",
+    "claude-code",
+    "codex",
+    "opencode",
+    "qwen",
+    "deepseek",
+    "llm",
+    "agent",
+    "bridge"
+  ],
+  "scripts": {
+    "start": "node bridge/mcp/shared-context-server.mjs",
+    "panel": "node bridge/mcp/bridge-web-panel.mjs",
+    "probe": "node scripts/probe-cli.mjs",
+    "smoke": "node scripts/smoke-test.mjs",
+    "concurrency": "node scripts/concurrency-test.mjs",
+    "test": "node scripts/full-test.mjs",
+    "probe-vector": "node scripts/probe-vector.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

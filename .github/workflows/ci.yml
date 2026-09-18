@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    name: Smoke & Probe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 结构自检（关键文件存在）
+        shell: bash
+        run: |
+          test -f bridge/mcp/shared-context-server.mjs
+          test -f bridge/mcp/agents-registry.mjs
+          test -f config/env.tmpl
+          test -f launchers/install.sh
+          test -f launchers/install-win.bat
+      - name: 语法校验（所有 .mjs 可加载）
+        run: |
+          node --check bridge/mcp/shared-context-server.mjs
+          node --check bridge/mcp/agents-registry.mjs
+          node --check bridge/mcp/run-driver.mjs
+          node --check bridge/mcp/state-store.mjs
+          node --check bridge/mcp/retry-safety.mjs
+          node --check bridge/mcp/sediment.mjs
+          node --check bridge/mcp/vec_memory.mjs
+          node --check bridge/mcp/bridge-web-panel.mjs
+      - name: 冒烟测试
+        run: node scripts/smoke-test.mjs
+      - name: CLI 探测（不依赖真实密钥，仅校验脚本可运行）
+        run: node scripts/probe-cli.mjs || true
