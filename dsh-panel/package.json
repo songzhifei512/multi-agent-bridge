@@ -1,0 +1,26 @@
+{
+  "name": "dsh-bridge-panel",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --format=esm --external:@cordis/types --external:react --external:react-dom && esbuild src/client/index.tsx --bundle --platform=browser --outfile=dist/client.js --format=esm --external:@cordis/types --external:react --external:react-dom",
+    "dev": "npm run build -- --watch"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "optionalDependencies": {
+    "@cordis/types": "*"
+  }
+}

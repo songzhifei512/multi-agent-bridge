@@ -1,0 +1,17 @@
+name: dsh-bridge-panel
+version: 0.1.0
+description: Multi-agent bridge console panel for DSH sidebar
+main: dist/index.js
+client: dist/client.js
+inject:
+  sidebar.right.pane.tab:
+    component: ./dist/client.js
+    label: Multi-Agent
+    icon: layers
+config:
+  port:
+    type: number
+    default: 3000
+  autoStart:
+    type: boolean
+    default: true
