@@ -3,6 +3,8 @@ import { useSessionFilter } from './hooks/useSessionFilter';
 import { useSSESubscription } from './hooks/useSSESubscription';
 import { TaskList } from './components/TaskList';
 import { WorkerStats } from './components/WorkerStats';
+import { DispatchForm } from './components/DispatchForm';
+import { EventStream } from './components/EventStream';
 
 interface Task {
   id: string;
@@ -53,6 +55,26 @@ export default function BridgeConsoleTab() {
     return () => clearInterval(interval);
   }, [sessionId]);
 
+  const handleDispatch = async (workerName: string, promptText: string) => {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        worker: workerName,
+        prompt: promptText,
+        session: sessionId,
+      }),
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Dispatch failed');
+    }
+
+    const result = await res.json();
+    console.log('Task dispatched:', result.taskId);
+  };
+
   if (error) {
     return (
       <div style={{ padding: '20px', color: 'red' }}>
@@ -68,16 +90,14 @@ export default function BridgeConsoleTab() {
       <h2>Multi-Agent Console</h2>
       <p style={{ fontSize: '12px', color: '#666' }}>Session: {sessionId}</p>
 
+      <DispatchForm
+        workers={workers.map(w => ({ name: w.name, healthy: w.healthy }))}
+        onDispatch={handleDispatch}
+      />
+
       <TaskList tasks={filteredTasks} />
       <WorkerStats workers={workers} />
-
-      {/* TODO: 添加 EventStream 和 DispatchForm */}
-      <div style={{ marginTop: '20px' }}>
-        <h4>事件流 ({events.length})</h4>
-        <pre style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px' }}>
-          {events.map((e, i) => JSON.stringify(e)).join('\n')}
-        </pre>
-      </div>
+      <EventStream events={events} />
     </div>
   );
 }
