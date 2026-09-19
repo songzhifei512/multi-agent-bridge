@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useSessionFilter } from './hooks/useSessionFilter';
 import { useSSESubscription } from './hooks/useSSESubscription';
+import { TaskList } from './components/TaskList';
+import { WorkerStats } from './components/WorkerStats';
 
 interface Task {
   id: string;
@@ -62,12 +64,20 @@ export default function BridgeConsoleTab() {
   }
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div style={{ padding: '20px', maxHeight: '100vh', overflowY: 'auto' }}>
       <h2>Multi-Agent Console</h2>
-      <p>Session: {sessionId}</p>
-      <p>Tasks: {filteredTasks.length}</p>
-      <p>Workers: {workers.length}</p>
-      <p>Events: {events.length}</p>
+      <p style={{ fontSize: '12px', color: '#666' }}>Session: {sessionId}</p>
+
+      <TaskList tasks={filteredTasks} />
+      <WorkerStats workers={workers} />
+
+      {/* TODO: 添加 EventStream 和 DispatchForm */}
+      <div style={{ marginTop: '20px' }}>
+        <h4>事件流 ({events.length})</h4>
+        <pre style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px' }}>
+          {events.map((e, i) => JSON.stringify(e)).join('\n')}
+        </pre>
+      </div>
     </div>
   );
 }
