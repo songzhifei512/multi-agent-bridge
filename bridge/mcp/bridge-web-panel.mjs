@@ -2169,6 +2169,47 @@ const server = createServer((req, res) => {
     });
     return;
   }
+  /* ── 任务派发端点：POST /api/run ─────────────────────────────── */
+  if (_url === '/api/run' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', async () => {
+      try {
+        const args = JSON.parse(body || '{}');
+        const { worker, prompt, model, session } = args;
+        
+        if (!worker || !prompt) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'worker and prompt required' }));
+          return;
+        }
+        
+        // 动态导入 run-driver 以避免循环依赖
+        const { runAgent } = await import('./run-driver.mjs');
+        const result = await runAgent(worker, {
+          prompt,
+          model,
+          session_id: session,
+        });
+        
+        if (!result) {
+          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: `worker "${worker}" not found` }));
+          return;
+        }
+        
+        // 从结果中提取 taskId（runAgent 返回的对象包含 task_id）
+        const taskId = result.task_id || result.taskId;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ taskId, status: 'queued' }));
+      } catch (err) {
+        console.error('[api/run] error:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
   if (_url === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(HTML);
