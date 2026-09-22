@@ -13,14 +13,16 @@ const IS_WIN = process.platform === "win32";
 const ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN;
 const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL;
 
-const CLAUDE_AUTH_ENV = {
+// CLAUDE_AUTH_ENV 在 spawn 时被 spread 进 process.env（见 run-driver.mjs runOnce opts.env）。
+// 未设 / 空串 / 占位符值经 envStrip 洗掉，避免 SDK 拿 "Not logged in" 或假 token 调远端。
+const CLAUDE_AUTH_ENV = envStrip({
   ANTHROPIC_AUTH_TOKEN,
   ANTHROPIC_BASE_URL,
   ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL || "<MODEL_AUTO>",
   ANTHROPIC_DEFAULT_OPUS_MODEL: process.env.ANTHROPIC_DEFAULT_OPUS_MODEL || "<MODEL_AUTO>",
   ANTHROPIC_DEFAULT_SONNET_MODEL: process.env.ANTHROPIC_DEFAULT_SONNET_MODEL || "<MODEL_MEDIUM>",
   ANTHROPIC_DEFAULT_HAIKU_MODEL: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL || "<MODEL_FLASH>",
-};
+});
 
 // ---- opencode worker env (备路 worker / 单发长文档互补) ----
 // opencode 是备路 worker（<PROVIDER> OpenAI 兼容端点 + --format json 解析）。
@@ -29,7 +31,8 @@ const CLAUDE_AUTH_ENV = {
 // 启动提速：OPENCODE_DISABLE_MODELS_FETCH=1（跳过 models.dev 在线拉取，省启动时间，主要提速点）
 // → opencode 启动明显提速。⚠ 不带 --pure：--pure 与 --format json 不兼容（跳过
 // oh-my-openagent 插件致回复正文不写 stdout，只剩 step_start 就 exit=0），见 opencodeBase() 注释。
-const OPENCODE_ENV = {
+// 同样经 envStrip：未注入 ANTHROPIC_AUTH_TOKEN 时不传（避免 SDK 拿 "Not logged in" 拒识）。
+const OPENCODE_ENV = envStrip({
   ANTHROPIC_AUTH_TOKEN,
   ANTHROPIC_BASE_URL,
   OPENAI_API_KEY: ANTHROPIC_AUTH_TOKEN,          // opencode 读 OPENAI_API_KEY
@@ -38,7 +41,7 @@ const OPENCODE_ENV = {
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || "",
   OPENCODE_DISABLE_MODELS_FETCH: "1",            // 跳过 models.dev 在线拉取（省启动时间）
   OPENCODE_MODEL_PROVIDER: process.env.OPENCODE_MODEL_PROVIDER || "",
-};
+});
 
 // ---- qwen worker env (qwen 端点, 写文档/PPT + 图像互补) ----
 // qwen CLI（Qwen Code）作 opencode 写文档互补 + vision_analyze 图像互补。--auth-type openai 走
@@ -60,10 +63,13 @@ function qwenApiKey() {
   } catch { /* opencode.json 不可读 → 空 key，上游明确失败 */ }
   return "";
 }
-const QWEN_ENV = {
+// qwen worker env 经 envStrip：未注入 QWEN_API_KEY 时不传 OPENAI_API_KEY（避免 qwen CLI 拿
+// 空 key 调 qwen 端点 401 后再吞错误）；endpoint 空串由 envStrip 剥掉（让上游 401 明确失败，
+// 绝不静默 fallback 明文端点）。
+const QWEN_ENV = envStrip({
   OPENAI_API_KEY: qwenApiKey(),
   OPENAI_BASE_URL: process.env.QWEN_BASE_URL || "",
-};
+});
 
 // qwen 默认模型：qwen CLI 内置默认模型在 qwen 端点不存在 → 500，
 // 故调用方未传 model 时显式钉这个 qwen 端点 真实模型。QWEN_DEFAULT_MODEL env 可覆盖。
@@ -92,6 +98,59 @@ const CODEX_DEFAULT_MODEL = process.env.CODEX_DEFAULT_MODEL || "<MODEL_MEDIUM>";
 // < > 会被当输入/输出重定向，报"系统找不到指定的文件"（codex/opencode 必传 -m 即此雷）。
 // 故占位符/空一律视为"未配置"，buildFresh 不注入 model，让 CLI 走本地 config 默认。
 const isPlaceholderModel = (m) => !m || /[<>]/u.test(String(m));
+
+// ---- env 注入清洗（v1.0.1+ 修复）----
+// 三个 worker env 对象（CLAUDE_AUTH_ENV / OPENCODE_ENV / QWEN_ENV）在 spawn 时被 spread 进
+// process.env。两条坑必须滤掉：
+//  1) 占位符 "<...>"：未注入真实 key 时 ANTHROPIC_AUTH_TOKEN 仍是 "<ANTHROPIC_KEY>" 这种
+//     字符串透传给子进程，claude SDK 拿到 "<...>" 不会判"未配置"而是把它当真实 token
+//     发出去（401/403）或直接拒识。须剥掉，避免子进程用假 token 调远端。
+//  2) 空串 ""：本机 env 未设时 process.env.X 取到 undefined → spread 时键消失 ✓；
+//     但若用户主动设了 ANTHROPIC_AUTH_TOKEN=（空），spread 会保留空串值 → claude SDK
+//     拿到 "" 会判"空 token"返回 "Not logged in"（实测报这个错），比未设更糟。
+//     envStrip 把空串一并剥掉，让 SDK 走「未注入 token」的本地登录态分支。
+// 用途：CLAUDE_AUTH_ENV / OPENCODE_ENV / QWEN_ENV 三个对象构造时统一过 realEnv()，避免
+//       每个对象手写过滤（容易漏）；后续新增 worker env 也走同一函数。
+function envStrip(env) {
+  if (!env || typeof env !== "object") return env || {};
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v == null) continue;                                // undefined / null → 跳过
+    const s = String(v);
+    if (!s) continue;                                        // 空串 → 跳过（关键修复）
+    if (/[<>]/.test(s)) continue;                           // 占位符 → 跳过（防假 token 透传）
+    //  v1.0.1+ 补：宿主污染键剥除（实测落地）。DSH / Qoder Desktop 宿主进程会
+    // 设 QODER_AGENT_SDK_ENTRYPOINT / QODER_AGENT_SDK_* 指向宿主内部 SDK 入口；
+    // 这些键透传给子进程 qodercli / qoderclicn 时，子进程 SDK 校验发现 entrypoint
+    // 是宿主内部路径但子进程又不在宿主 runtime 内 → 抛 "sdk_invalid_args: Agent
+    // SDK entrypoint env is set but r..."（实测 2026-09-23 qoder_cn dispatch）。
+    // 解决方案：envStrip 自动剔除所有以 QODER_AGENT_SDK_ 开头的键，不论值是什么。
+    // 用户在主进程显式设这些键用于非预期场景的概率极低，且可通过 BRIDGE_KEEP_QODER_SDK=1
+    // 关停此剥除（紧急逃生通道）。
+    if (process.env.BRIDGE_KEEP_QODER_SDK !== "1" && k.startsWith("QODER_AGENT_SDK_")) continue;
+    out[k] = s;
+  }
+  return out;
+}
+// v1.0.1+ 补：把 QODER_AGENT_SDK_* 宿主污染键从 process.env 里一并剥掉，构造一个干净的
+// 子进程 env 起点。注意：只删 QODER_AGENT_SDK_ 前缀（最小破坏面），不动其它任何 env。
+// 返回的对象用于 spawn opts.env 的基底层（spread ...process.env 改用这个 clean 版本）。
+export function cleanProcessEnv() {
+  const out = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (process.env.BRIDGE_KEEP_QODER_SDK !== "1" && k.startsWith("QODER_AGENT_SDK_")) continue;
+    out[k] = v;
+  }
+  return out;
+}
+// 构造后立即清洗一次，三个 env 对象在 spawn 时已是干净 env；run-driver 的 spread 是 no-op
+// 二次清洗（兼容旧路径或外部 mutate）。同步公开 envStrip 供 run-driver 在 spread 之前兜底。
+export { envStrip };
+
+// 旧占位变量名保留为构造入口（兼容测试 / 旧 grep），但实际清洗过。ANTHROPIC_AUTH_TOKEN /
+// ANTHROPIC_BASE_URL 在文件顶部已读 process.env，这里只是组装 env 对象时同步过 strip。
+// 实测（2026-09-23）：未设 env 时 strip 后 CLAUDE_AUTH_ENV = {}（无 ANTHROPIC_AUTH_TOKEN 键），
+// spawn 时 SDK 走本地登录态 ✓；设空串时被剥掉，效果同未设 ✓；设占位符时被剥掉 ✓。
 
 // ---- opencode worker runtime ----
 // opencode 是备路 worker（无状态单发文本/代码 + 限流并发备路 + 单发长文档互补）。
@@ -568,7 +627,8 @@ const PROBE = {
 for (const [name, p] of Object.entries(PROBE)) if (AGENTS[name]) AGENTS[name].probe = p;
 
 // 判断可执行文件/命令是否存在于本机（绝对/相对路径 → existsSync；纯命令名 → where/which 查 PATH）。
-function execOnPath(cmd) {
+// 导出供 run-driver 在派发前做 fast-fail auto-probe（agent.available===undefined 时触发）。
+export function execOnPath(cmd) {
   if (!cmd) return false;
   if (cmd.includes("/") || cmd.includes("\\")) {
     return existsSync(cmd) || existsSync(cmd + ".cmd") || existsSync(cmd + ".exe");
