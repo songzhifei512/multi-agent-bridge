@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS } from "./agents-registry.mjs";
+import { AGENTS, envStrip, execOnPath, cleanProcessEnv } from "./agents-registry.mjs";
 import { isRetryableExit, isFakeSuccess, safetyScan, parseRetryAfter, sleep } from "./retry-safety.mjs";
 import { updateMem, loadMem, BRIDGE_WORK_ROOT, resolveInWorkDir, generateTaskId } from "./state-store.mjs";
 
@@ -18,20 +18,45 @@ function runOnce(agent, args, timeoutMs) {
   return new Promise((res) => {
     const cmd = args.session_id ? agent.buildResume(args) : agent.buildFresh(args);
     const usesStdin = !!agent.needsStdin;
+    // v1.0.1+：opts.env 在两种情形下必须剥 QODER_AGENT_SDK_*（宿主污染）：
+    //  a) agent.env 非空 → 用 cleanProcessEnv() 替换 process.env 作基底层 + envStrip(agent.env) 覆盖
+    //  b) agent.env 为空（codex / qoder/qoder_cn / dsh 无 auth env）→ Node 默认用 process.env，
+    //     仍含宿主污染键，会原样传给子进程 → 同样需替换为 cleanProcessEnv()
+    // 统一处理：始终设 opts.env = cleanProcessEnv()（agent.env 时再叠加）。
     const opts = { stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"], timeout: timeoutMs, shell: IS_WIN };
     if (agent.env) {
-      opts.env = { ...process.env, ...agent.env };
+      // v1.0.1+ 二次清洗：agent.env 在 agents-registry.mjs 构造时已 envStrip，但提供第二道闸
+      // ——防御未来给 AGENTS[name].env 动态 mutate 的场景（如自定义 agent descriptor）。
+      // envStrip 内部已剥空串/占位符/非字符串，spread 进 process.env 后子进程拿到的 env
+      // 是干净的：claude SDK 不会因为 ANTHROPIC_AUTH_TOKEN="" 报 "Not logged in"，
+      // 也不会拿到 "<X>" 这种占位串调远端（401/403 而非明确失败）。
+      //
+      // 基底层 cleanProcessEnv() 已把 QODER_AGENT_SDK_* 宿主污染键从 process.env 剥掉，
+      // 再 spread envStrip(agent.env) 覆盖。整套 env 注入子进程前无任何宿主 SDK 入口。
+      opts.env = { ...cleanProcessEnv(), ...envStrip(agent.env) };
       // 2026-08-31 修复：claude 内部 SDK 分层调用（title-gen/SDK 自动选模型）读 ANTHROPIC_MODEL /
       // ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL env，不跟随 --model。模型轮换时把被选中的
       // model 同步进这些 env，使 title-gen 与 SDK 用同一已解析模型，避免 "<PROVIDER>-Auto 常 429 时 claude
       // 内部仍用 Auto 无法换 → 视图评估全部超时失败"（某次评估任务超时即此因）。对 claude 之外的 agent
       // （env 无 ANTHROPIC_DEFAULT_* 键）此同步是空操作，不影响 codex/qwen/opencode。
-      if (args.model && opts.env.ANTHROPIC_MODEL) {
+      //
+      // v1.0.1+ 修正：原写法 `args.model && opts.env.ANTHROPIC_MODEL` 只在 ANTHROPIC_MODEL
+      // 键存在时同步，但 envStrip 后占位符被剥掉可能让键不存在 → 同步失效。改成：
+      // 仅当 args.model 是合法（已过 isPlaceholderModel 守卫）的非占位符模型时才同步。
+      // 这条 model 占位符守卫在 buildFresh 已有，但这里同步是 SDK 内部分层调用，
+      // 不能因 SDK 同步阶段传占位符让 SDK 走不通的端点。
+      if (args.model && !/[<>]/.test(String(args.model)) && opts.env.ANTHROPIC_MODEL !== undefined) {
         opts.env.ANTHROPIC_MODEL = args.model;
         opts.env.ANTHROPIC_DEFAULT_OPUS_MODEL = args.model;
         opts.env.ANTHROPIC_DEFAULT_SONNET_MODEL = args.model;
         opts.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = args.model;
       }
+    } else {
+      // agent.env 为 null（codex/qoder/qoder_cn/dsh 无 auth env）→ Node spawn 默认
+      // 用 process.env 作子进程 env，里面仍可能含 QODER_AGENT_SDK_* 宿主污染键 → 必须
+      // 显式替换为 cleanProcessEnv()。否则 qoder/qoder_cn 子进程拿到宿主 SDK entrypoint
+      // 报 "sdk_invalid_args"（实测 2026-09-23）。
+      opts.env = cleanProcessEnv();
     }
     //  + ⑬：强制 workdir 落 BRIDGE_WORK_ROOT 内；未传 workdir 时若带 task_id 则按任务
     // 自动派生独立隔离目录（per-task 沙箱,任务互不覆写）。同 task 复用同目录（含重试/resume）。
@@ -171,6 +196,19 @@ export function runAgent(name, args, opts = {}) {
       content: [{ type: "text", text: `agent "${name}" 不可用：本地未检测到其 CLI/端点配置。${hint}。先跑 agent_scan 识别本地已装的 worker，安装后再派发。` }],
       isError: true,
     }))();
+  }
+  // v1.0.1+ auto-probe gate：agent.available===undefined 表示从未探测（agent_scan 未被调用
+  // 或新 worker descriptor 未挂 probe 元数据）。这里做一次 fast-fail：bin 类用 execOnPath 探
+  // 一次 CLI 是否在 PATH 上（<100ms）。不存在则立即返回结构化报错，不再 spawn 后才暴露
+  // ENOENT —— spawn ENOENT 会让 task 落成 failed（exit_code=null, spawn_error），还要等
+  // 用户查任务记录才知道是 CLI 没装。fast-fail 让错误点前移到派发入口。
+  if (agent.available === undefined && agent.probe && agent.probe.kind === "bin" && agent.probe.cmd) {
+    if (!execOnPath(agent.probe.cmd)) {
+      return (async () => ({
+        content: [{ type: "text", text: `agent "${name}" 不可用：CLI 未在本机 PATH 上（auto-probe fail-fast）。${agent.probe.hint || "见 public-install/INSTALL.md"}。先跑 agent_scan 识别本地已装的 worker。` }],
+        isError: true,
+      }))();
+    }
   }
   const taskId = args.task_id || generateTaskId();
   const nowIso = new Date().toISOString();
