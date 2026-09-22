@@ -181,7 +181,26 @@ export function updateKV(mutator) {
 //   不会误杀长任务（长时间运行的任务也持续跳心跳），只抓真正停滞的卡死任务。
 //   扫描挂在 task_list 入口（高频调用，自然触发清理），无需独立定时器（stdio 无后台循环）。
 //   返回被清理的 task_id 列表，供调用方/日志感知。
+//
+// v1.0.1+ 增强：orphan-reaped pid-dead fast path
+//   仅靠心跳超时清理太慢（最坏 10 分钟）。实际场景里 worker 父进程被 OOM/SIGKILL 时，
+//   runOnce 的 child.on("exit") 可能没机会触发（父进程已死），任务记录卡 running 但
+//   pid 早已无效。加 pid-dead 快速路径：running + 有 agent_live.pid + process.kill(pid, 0)
+//   抛 ESRCH（进程不存在）→ 立即标 failed + result='orphan-reaped: pid N dead'。
+//   双重保险：心跳超时仍是兜底（pid 探不到但进程可能还活——孤儿挂起场景），不破坏原逻辑。
 const HEARTBEAT_STALE_MS = 10 * 60 * 1000; // 心跳停滞阈值：10 分钟
+// pid-dead 探测：抛 ESRCH 即死。EPERM 在某些平台代表"有权访问但非己子进程"——这里不视为死，
+// 留给心跳超时兜底（避免误杀）。其他异常保守放行（让心跳兜底）。
+function isPidDead(pid) {
+  if (!pid || !Number.isFinite(pid)) return false;
+  try {
+    process.kill(pid, 0);
+    return false; // signal 0 OK → 进程还活
+  } catch (e) {
+    if (e && (e.code === "ESRCH" || e.code === "ENOENT")) return true;
+    return false; // EPERM / 其他 → 不视为死，留给心跳兜底
+  }
+}
 export function sweepStaleRunning(m) {
   const swept = [];
   const now = Date.now();
@@ -192,6 +211,20 @@ export function sweepStaleRunning(m) {
   for (const id in m.tasks) {
     const t = m.tasks[id];
     if (t.status !== "running") continue;
+    // v1.0.1+ fast path：先看 pid 是否已死（orphan-reaped）。典型场景：worker 父进程 OOM/SIGKILL
+    // → child.on("exit") 没机会跑 → 任务记录卡 running。pid-dead 立即清理（避免 10 分钟盲等）。
+    const livePid = t.agent_live && t.agent_live.pid;
+    if (livePid && isPidDead(livePid)) {
+      const ageSec = Math.round((now - (t.last_heartbeat_at || Date.parse(t.created_at) || now)) / 1000);
+      t.status = "failed";
+      t.completed_at = new Date().toISOString();
+      t.result = `orphan-reaped: pid ${livePid} dead (no process signal received; heartbeat last seen ${ageSec}s ago)`;
+      t.progress_log = t.progress_log || [];
+      t.progress_log.push({ ts: t.completed_at, note: `orphan-reaped: pid ${livePid} dead (fast-path, age=${ageSec}s)` });
+      delete t.agent_live; // 清掉 agent_live 避免面板继续显示"busy"
+      swept.push(id);
+      continue;
+    }
     const last = t.last_heartbeat_at || (t.created_at ? Date.parse(t.created_at) : 0);
     if (!last) continue; // 无心跳无创建时间，跳过（不靠猜）
     // 长任务放宽：heartbeat_interval_ms（worker 主动设的心跳周期）→ stale 阈值按 20× 间隔放大，
