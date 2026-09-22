@@ -1,0 +1,41 @@
+{
+  "id": "qoder-bridge",
+  "name": "Multi-Agent Bridge Console",
+  "version": "0.1.0",
+  "engines": {
+    "qoder": ">=0.0.1"
+  },
+  "main": "dist/node/main.cjs",
+  "activationEvents": ["onStartup", "onView:bridge-portal"],
+  "permissions": ["node.callService"],
+  "contributes": {
+    "views": [
+      {
+        "id": "bridge-portal",
+        "title": {
+          "default": "Multi-Agent Bridge",
+          "translations": {
+            "zh-CN": "多智能体桥"
+          }
+        },
+        "location": "workbench",
+        "hostHeader": "hidden",
+        "entry": "dist/browser/view.cjs"
+      }
+    ],
+    "sidebarNavItems": [
+      {
+        "id": "bridge-portal-sidebar",
+        "title": {
+          "default": "Multi-Agent",
+          "translations": {
+            "zh-CN": "多智能体"
+          }
+        },
+        "icon": "assets/bridge.svg",
+        "viewId": "bridge-portal",
+        "slot": "workbench.sidebar.secondary"
+      }
+    ]
+  }
+}
