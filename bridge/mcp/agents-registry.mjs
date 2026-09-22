@@ -70,11 +70,28 @@ const QWEN_ENV = {
 // Qwen3.6-35B-A3B-FP8 稳；Qwen3.5-397B-A17B-FP8 偶发慢/超时。
 const QWEN_DEFAULT_MODEL = process.env.QWEN_DEFAULT_MODEL || "Qwen3.6-35B-A3B-FP8";
 
+// ---- qoder worker env (阿里 Qoder CLI，全栈编程Agent + 中文优化 + /review 代码审查) ----
+// Qoder CLI 是阿里全栈 Agent 式编程工具，非交互模式：qodercli -p -o json "prompt text"
+//   - `-p / --print` = 非交互模式（打印结果后退出）
+//   - `-o json / --output-format json` = JSON 输出
+//   - prompt 作为位置参数放在命令最后（不支持 stdin 输入）
+// 鉴权方式：登录态（qodercli login），凭证存 ~/.qoder/.auth/，无 API Key 环境变量。
+// 真 resume（-r <id> / --resume <id>）+ auto-edit（--permission-mode auto）+ JSON 输出，6 轴全配。
+// 定位：claude/codex 的中文场景补位 + 阿里系独立限流备路 + /review 代码审查能力。
+const QODER_ENV = null; // 登录态鉴权，无 env 变量（同 codex/dsh 模式）
+const QODER_DEFAULT_MODEL = process.env.QODER_DEFAULT_MODEL || "";
+
 // codex 默认模型：调用方未传 model 时，codex 会走本地 config.toml
 // 的默认——可能走外网模型，导致超时/无法连 <PROVIDER> 端点。
 // 这里显式钉 <PROVIDER>-Medium（用户指定），codex model 名不带 provider 前缀（本地配置统一路由）。
 // CODEX_DEFAULT_MODEL env 可覆盖；fallback 在重试时代入（见 fallbackModels）。
 const CODEX_DEFAULT_MODEL = process.env.CODEX_DEFAULT_MODEL || "<MODEL_MEDIUM>";
+
+// 脱敏占位符检测：公网分发包里模型名用 <PLACEHOLDER> 占位（不含真实名），真实值靠 env 注入。
+// env 未注入时模型名仍是 "<...>" 占位符。Windows shell:true 把命令交给 cmd.exe，占位符里的
+// < > 会被当输入/输出重定向，报"系统找不到指定的文件"（codex/opencode 必传 -m 即此雷）。
+// 故占位符/空一律视为"未配置"，buildFresh 不注入 model，让 CLI 走本地 config 默认。
+const isPlaceholderModel = (m) => !m || /[<>]/u.test(String(m));
 
 // ---- opencode worker runtime ----
 // opencode 是备路 worker（无状态单发文本/代码 + 限流并发备路 + 单发长文档互补）。
@@ -150,6 +167,38 @@ function parseQwenOut(out) {
       if (r) return { text: (r.result || "").trim() || out, sessionId: r.session_id || null };
     } else if (arr && arr.type === "result") {
       return { text: (arr.result || "").trim() || out, sessionId: arr.session_id || null };
+    }
+  } catch { /* 非 JSON（日志/进度行混入），回退 */ }
+  return { text: out, sessionId: captureSessionId(out) };
+}
+
+// Parse qoder `--output-format json` output into { text, sessionId }.
+// Qoder CLI 的 JSON 输出格式待实测确认——可能是单 JSON 对象（含 result+session_id），
+// 也可能是事件流数组（类 qwen）。先做兼容解析：
+//   情况 A：{ result: "...", session_id: "..." } 单对象
+//   情况 B：[{type:"result", result:"...", session_id:"..."}] 数组（类 qwen）
+//   情况 C：{ content: "...", sessionId: "..." } 其他格式
+// 全部解析失败回退原始输出 + 正则抓 session id。
+function parseQoderOut(out) {
+  const json = extractJsonObject(out);
+  if (!json) return { text: out, sessionId: captureSessionId(out) };
+  try {
+    const d = JSON.parse(json);
+    // 情况 A：直接 { result, session_id } 单对象格式
+    if (typeof d.result === "string") {
+      return { text: d.result, sessionId: d.session_id || captureSessionId(out) };
+    }
+    // 情况 B：数组格式（末尾 result 事件，类 qwen）
+    if (Array.isArray(d)) {
+      const r = d.find((e) => e && e.type === "result");
+      if (r) return {
+        text: (r.result || r.content || "").trim() || out,
+        sessionId: r.session_id || captureSessionId(out),
+      };
+    }
+    // 情况 C：含 content 字段的其他格式
+    if (typeof d.content === "string") {
+      return { text: d.content, sessionId: d.session_id || d.sessionId || captureSessionId(out) };
     }
   } catch { /* 非 JSON（日志/进度行混入），回退 */ }
   return { text: out, sessionId: captureSessionId(out) };
@@ -237,13 +286,16 @@ function opencodeAgent(modelDefault) {
     buildFresh: (a) => {
       const m = a.model || modelDefault;
       // opencode run --model <m> --format json - ，prompt 经 stdin 读；"-" 避免 Windows argv 截断长中文。
-      return [...opencodeBase(), "--model", m, "--format", "json", "-"];
+      // 占位符/未配置 → 不传 --model，让 opencode 走本地配置默认模型。
+      if (!isPlaceholderModel(m)) return [...opencodeBase(), "--model", m, "--format", "json", "-"];
+      return [...opencodeBase(), "--format", "json", "-"];
     },
     buildResume: (a) => {
       const m = a.model || modelDefault;
       // 退化为 fresh：opencode 的消费者 session 与 bridge 的 --session-id 模型不对应，
       // 无法从 --format json 的 NDJSON 事件可靠恢复 session（见 parseOpenCodeOut）。
-      return [...opencodeBase(), "--model", m, "--format", "json", "-"];
+      if (!isPlaceholderModel(m)) return [...opencodeBase(), "--model", m, "--format", "json", "-"];
+      return [...opencodeBase(), "--format", "json", "-"];
     },
   };
 }
@@ -266,8 +318,8 @@ export const AGENTS = {
       // 默认降 reasoning 抑制 429；调用方可显式 args.reasoning 覆盖（如 /codex reasoning=high）。
       if (a.reasoning) cmd.push("-c", `model_reasoning_effort=${a.reasoning}`);
       else cmd.push("-c", "model_reasoning_effort=low");
-      if (a.model) cmd.push("-m", a.model);
-      else cmd.push("-m", CODEX_DEFAULT_MODEL); //  默认钉 <PROVIDER>-Auto，避免走 config.toml 默认外网模型
+      const m = a.model || CODEX_DEFAULT_MODEL;
+      if (!isPlaceholderModel(m)) cmd.push("-m", m); // 占位符/未配置 → 不传 model，走本地 config.toml
       cmd.push("-"); // 长 prompt 经 stdin 读（needsStdin）；"-" 让 codex exec 从 stdin 取完整 prompt
       return cmd;
     },
@@ -279,8 +331,8 @@ export const AGENTS = {
       if (a.auto) cmd.push("--dangerously-bypass-approvals-and-sandbox");
       if (a.reasoning) cmd.push("-c", `model_reasoning_effort=${a.reasoning}`);
       else cmd.push("-c", "model_reasoning_effort=low");
-      if (a.model) cmd.push("-m", a.model);
-      else cmd.push("-m", CODEX_DEFAULT_MODEL); //  默认钉 <PROVIDER>-Auto
+      const m = a.model || CODEX_DEFAULT_MODEL;
+      if (!isPlaceholderModel(m)) cmd.push("-m", m);
       cmd.push("-"); // 同上：resume 也经 stdin 读 prompt
       return cmd;
     },
@@ -403,18 +455,115 @@ export const AGENTS = {
     fallbackModels: ["Qwen3.6-35B-A3B-FP8", "Qwen3-235B-A22B-Instruct-2507", "DeepSeek-V3.1"],
     needsStdin: true,
   },
+  // qoder：阿里 Qoder CLI，全栈 Agent 式编程 + 中文优化 + /review 代码审查。
+  // 定位：claude/codex 的中文场景补位 + 阿里系独立限流备路 + /review 代码审查能力。
+  // 实测参数（v1.1.59）：
+  //   - 非交互：-p / --print（标志位，后接位置参数 prompt）
+  //   - JSON：-o json / --output-format json
+  //   - 自动执行：--permission-mode accept_edits（配合 --no-session-persistence）
+  //   - 续接会话：-r <id> / --resume <id>（仅非 auto 模式可用，见下方说明）
+  //   - 模型：-m <model> / --model <model>
+  //   - 工作目录：-w <dir> / --cwd <dir>
+  //   - prompt：位置参数（不支持 stdin，长 prompt 走 argv）
+  //
+  // ⚠️ EPERM 问题与 trade-off：
+  //   Qoder CLI 在工具调用模式下（auto/accept_edits），会往 ~/.qoder/projects/<项目>/
+  //   写入 session 的 .jsonl 日志文件，在 Windows 部分环境下会报 EPERM。
+  //   解决方案：auto 模式下加 --no-session-persistence 禁用 session 持久化，绕过 EPERM。
+  //   trade-off：auto 模式不能 resume（session 不持久化）；resume 时只能非 auto（纯问答）。
+  //   这是 Qoder CLI 自身的限制，非 bridge 代码问题。
+  //
+  // ⚠️ 长 prompt 限制：Qoder 不支持 stdin 输入，prompt 走 argv。Windows 下 argv 有长度限制，
+  //    超长 prompt 可能被截断。可考虑用 --attachment 附件方式绕过（后续优化）。
+  qoder: {
+    name: "qoder",
+    buildFresh: (a) => {
+      const c = ["qodercli", "-p", "-o", "json"];
+      // auto 模式：--permission-mode accept_edits + --no-session-persistence
+      // accept_edits 允许自动编辑/写文件；--no-session-persistence 绕过 EPERM 问题
+      // trade-off：auto 模式下 session 不持久化，不能 resume
+      if (a.auto) {
+        c.push("--permission-mode", "accept_edits");
+        c.push("--no-session-persistence");
+      }
+      // 显式指定模型（用户传了才加，不传走 Qoder 本地配置的默认模型）
+      if (a.model) c.push("-m", a.model);
+      else if (QODER_DEFAULT_MODEL) c.push("-m", QODER_DEFAULT_MODEL);
+      // prompt 作为位置参数放在最后（不支持 stdin）
+      c.push(a.prompt);
+      return c;
+    },
+    buildResume: (a) => {
+      // resume 模式：不加 --no-session-persistence（否则找不到 session）
+      // 也不加 --permission-mode（避免触发工具调用导致 EPERM）
+      // 即 resume 只能做纯文本问答，不能自动写文件
+      const c = ["qodercli", "-p", "-o", "json", "-r", a.session_id];
+      if (a.model) c.push("-m", a.model);
+      else if (QODER_DEFAULT_MODEL) c.push("-m", QODER_DEFAULT_MODEL);
+      c.push(a.prompt);
+      return c;
+    },
+    env: QODER_ENV,
+    parse: parseQoderOut,
+    hasAuto: true, // auto 模式通过 accept_edits + --no-session-persistence 实现（不能 resume）
+    // 能力标签：全栈编程 + 长任务 + 代码审查 + 中文优化
+    capabilities: ["fullstack-codegen", "long-goal", "code-review", "chinese-native"],
+    strengths: "全栈Agent式编程、/goal长任务模式、中文场景优化、/review代码审查、Sub-Agent子智能体",
+    // 模型轮换池——初始留空（登录后可用 --list-models 查询真实模型列表再补充）
+    fallbackModels: [],
+    needsStdin: false, // Qoder 不支持 stdin 输入，prompt 走位置参数
+  },
+  // qoder_cn：阿里 Qoder CN CLI（国内版 / 通义灵码），国内合规 + 通义大模型。
+  // 与国际版 qoder 参数格式几乎一致，但账号体系、模型服务、配置目录完全独立。
+  // 定位：国内通义系独立限流池 + 国内低延迟 + 合规数据不出境。
+  // 命令名：qoderclicn（npm i -g @qodercn-ai/qoderclicn）
+  // 鉴权：登录态（qoderclicn login，阿里云账号 / Qoder CN 账号）
+  // EPERM 问题与 trade-off 同国际版 qoder：auto 模式需 --no-session-persistence 绕过。
+  qoder_cn: {
+    name: "qoder_cn",
+    buildFresh: (a) => {
+      const c = ["qoderclicn", "-p", "-o", "json"];
+      // auto 模式：同国际版，accept_edits + --no-session-persistence 绕过 EPERM
+      if (a.auto) {
+        c.push("--permission-mode", "accept_edits");
+        c.push("--no-session-persistence");
+      }
+      if (a.model) c.push("-m", a.model);
+      else if (process.env.QODER_CN_DEFAULT_MODEL) c.push("-m", process.env.QODER_CN_DEFAULT_MODEL);
+      c.push(a.prompt);
+      return c;
+    },
+    buildResume: (a) => {
+      // resume 模式：不加 --no-session-persistence，不加 permission-mode（避免 EPERM）
+      const c = ["qoderclicn", "-p", "-o", "json", "-r", a.session_id];
+      if (a.model) c.push("-m", a.model);
+      else if (process.env.QODER_CN_DEFAULT_MODEL) c.push("-m", process.env.QODER_CN_DEFAULT_MODEL);
+      c.push(a.prompt);
+      return c;
+    },
+    env: null, // 登录态鉴权，同国际版 qoder
+    parse: parseQoderOut, // 输出格式与国际版 qoder 一致，复用解析器
+    hasAuto: true,
+    // 能力标签：全栈编程 + 国内合规 + 中文原生 + 低延迟
+    capabilities: ["fullstack-codegen", "china-compliance", "chinese-native", "low-latency-cn"],
+    strengths: "国内通义大模型、合规数据不出境、低延迟、中文原生优化、国内账号体系",
+    fallbackModels: ["Qwen3.8-Flash", "Qwen3.7-Flash", "DeepSeek-Flash", "GLM-5.3-Flash"],
+    needsStdin: false,
+  },
 };
 
 // ---- CLI 可用性探测 + 动态挂载（agent_scan 使用）----
 // 识别本地已装的 worker CLI → 检测是否可加入 → 挂载（AGENTS[name].available 标记）。
 // probe 元数据独立于描述子（避免为 5 个 agent 逐个手改内部结构）；runAgent 派发前据 available 拒绝缺失 CLI。
-// kind "bin" = PATH/绝对路径上有可执行文件；kind "env" = 端点方式（qwen），任一 env 变量已配置即可用。
+// kind "bin" = PATH/绝对路径上有可执行文件（qwen 也归此类：run_qwen 实际 spawn 'qwen' 命令，非纯端点）。
 const PROBE = {
   codex:    { kind: "bin", cmd: "codex",    hint: "npm i -g @openai/codex" },
   claude:   { kind: "bin", cmd: CLAUDE_BIN, hint: "npm i -g @anthropic-ai/claude-code（或设 CLAUDE_BIN）" },
-  qwen:     { kind: "env", vars: ["QWEN_BASE_URL", "OPENAI_BASE_URL"], hint: "配置 QWEN_BASE_URL（端点方式，无独立 CLI）" },
+  qwen:     { kind: "bin", cmd: "qwen", hint: "安装 Qwen Code CLI 使 'qwen' 命令可用（见 public-install/INSTALL.md）" },
   opencode: { kind: "bin", cmd: OC_ENTRY,   hint: "npm i -g opencode-ai" },
   dsh:      { kind: "bin", cmd: DSH_BIN,    hint: "npm i -g @deepseek-ai/dsh（或设 DSH_BIN）" },
+  qoder:    { kind: "bin", cmd: "qodercli", hint: "npm i -g @qoder-ai/qodercli（安装 Qoder CLI 使 'qodercli' 命令可用）" },
+  qoder_cn: { kind: "bin", cmd: "qoderclicn", hint: "npm i -g @qodercn-ai/qoderclicn（安装 Qoder CN CLI 使 'qoderclicn' 命令可用）" },
 };
 for (const [name, p] of Object.entries(PROBE)) if (AGENTS[name]) AGENTS[name].probe = p;
 

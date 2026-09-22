@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Agent Bridge — UI 优化预览</title>
+<style>
+/* ─── Reset & Base ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0a0f;
+  --card: #12121a;
+  --hover: #1a1a26;
+  --border: #1e1e2e;
+  --border2: #2a2a3e;
+  --txt: #e4e4ed;
+  --mut: #6b6b80;
+  --dim: #44445a;
+  --acc: #6366f1;
+  --acc-glow: rgba(99,102,241,.15);
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --err: #ef4444;
+  --run: #3b82f6;
+  --pend: #eab308;
+  --sup: #64748b;
+  --radius: 10px;
+  --radius-sm: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --body-bg: #050508;
+  --overlay-bg: rgba(5,5,10,.7);
+  --shadow-panel: 0 0 60px rgba(99,102,241,.06), 0 0 0 1px rgba(255,255,255,.03) inset;
+  --toast-bg: rgba(34,197,94,.12);
+  --toast-border: rgba(34,197,94,.3);
+  --toast-color: #86efac;
+  --dag-node-fill: #12121a;
+  --dag-text-done: #6b6b80;
+  --dag-text-active: #e4e4ed;
+  --dag-edge: #44445a;
+  --fab-shadow: 0 4px 16px rgba(99,102,241,.35);
+  --fab-shadow-hover: 0 6px 24px rgba(99,102,241,.5);
+  --conn-shadow: 0 0 6px;
+  --task-run-shadow: 0 0 4px rgba(59,130,246,.4);
+}
+
+/* ─── Light Theme ─── */
+[data-theme="light"] {
+  --bg: #f5f6fa;
+  --card: #ffffff;
+  --hover: #eef0f5;
+  --border: #e2e4ea;
+  --border2: #d0d3dc;
+  --txt: #1a1a2e;
+  --mut: #6b7080;
+  --dim: #9ca0ad;
+  --acc: #4f46e5;
+  --acc-glow: rgba(79,70,229,.1);
+  --ok: #16a34a;
+  --warn: #d97706;
+  --err: #dc2626;
+  --run: #2563eb;
+  --pend: #ca8a04;
+  --sup: #64748b;
+  --body-bg: #ebedf3;
+  --overlay-bg: rgba(0,0,0,.35);
+  --shadow-panel: 0 1px 3px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.04);
+  --toast-bg: rgba(22,163,74,.1);
+  --toast-border: rgba(22,163,74,.25);
+  --toast-color: #15803d;
+  --dag-node-fill: #ffffff;
+  --dag-text-done: #6b7080;
+  --dag-text-active: #1a1a2e;
+  --dag-edge: #c0c4d0;
+  --fab-shadow: 0 4px 16px rgba(79,70,229,.25);
+  --fab-shadow-hover: 0 6px 24px rgba(79,70,229,.35);
+  --conn-shadow: 0 0 5px;
+  --task-run-shadow: 0 0 4px rgba(37,99,235,.3);
+}
+
+body {
+  font-family: var(--font);
+  background: var(--body-bg);
+  color: var(--txt);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 100vh;
+  padding: 40px 20px;
+  transition: background .3s, color .3s;
+}
+
+/* ─── Panel Container ─── */
+.panel {
+  width: 320px;
+  height: calc(100vh - 80px);
+  max-height: 780px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  box-shadow: var(--shadow-panel);
+  transition: background .3s, border-color .3s, box-shadow .3s;
+}
+
+/* ─── Sticky Header ─── */
+.header {
+  flex-shrink: 0;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  transition: background .3s, border-color .3s;
+}
+
+.header-row1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: var(--conn-shadow) var(--ok);
+  flex-shrink: 0;
+}
+
+.conn-dot.off { background: var(--dim); box-shadow: none; }
+
+.controller-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt);
+  flex: 1;
+}
+
+.panel-label {
+  font-size: 10px;
+  color: var(--mut);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  transition: background .3s, border-color .3s, color .3s;
+}
+
+.stats-row {
+  display: flex;
+  gap: 4px;
+}
+
+.stat-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--mut);
+  flex: 1;
+  justify-content: center;
+  transition: background .3s, border-color .3s;
+}
+
+.stat-chip b {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stat-chip.run b { color: var(--run); }
+.stat-chip.pend b { color: var(--pend); }
+.stat-chip.ok b { color: var(--ok); }
+.stat-chip.err b { color: var(--err); }
+
+/* ─── Scrollable Content ─── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.content::-webkit-scrollbar { width: 6px; }
+.content::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+
+/* ─── Section Divider ─── */
+.section-div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 2px;
+  font-size: 10px;
+  color: var(--dim);
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.section-div::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ─── Workflow Card ─── */
+.wf-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color .2s, background .3s;
+}
+
+.wf-card:hover { border-color: var(--border2); }
+
+.wf-card.active { border-color: rgba(99,102,241,.25); }
+
+.wf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+
+.wf-head:hover { background: var(--hover); }
+
+.wf-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wf-dot.running { background: var(--run); box-shadow: 0 0 5px var(--run); }
+.wf-dot.completed { background: var(--ok); }
+.wf-dot.failed { background: var(--err); }
+.wf-dot.pending { background: var(--pend); }
+.wf-dot.idle { background: var(--dim); }
+
+.wf-name {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-count {
+  font-size: 10px;
+  color: var(--mut);
+  white-space: nowrap;
+}
+
+.wf-members {
+  display: flex;
+  gap: 3px;
+}
+
+.wf-member-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.wf-chevron {
+  font-size: 10px;
+  color: var(--dim);
+  transition: transform .2s;
+  flex-shrink: 0;
+}
+
+.wf-card.expanded .wf-chevron { transform: rotate(90deg); }
+
+/* ─── Progress Bar ─── */
+.wf-progress {
+  height: 2px;
+  background: var(--border);
+  margin: 0 12px;
+  border-radius: 1px;
+  overflow: hidden;
+  display: flex;
+}
+
+.wf-progress .seg-run { background: var(--run); }
+.wf-progress .seg-pend { background: var(--pend); }
+.wf-progress .seg-ok { background: var(--ok); }
+.wf-progress .seg-err { background: var(--err); }
+
+/* ─── Expanded Body ─── */
+.wf-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .25s ease-out;
+}
+
+.wf-card.expanded .wf-body { max-height: 600px; }
+
+.wf-tasks {
+  padding: 8px 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ─── Task Row ─── */
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  transition: background .15s;
+}
+
+.task-row:hover { background: var(--hover); }
+
+.task-row.highlight {
+  background: var(--acc-glow);
+  animation: fadeHighlight 2s ease-out forwards;
+}
+
+@keyframes fadeHighlight {
+  0% { background: var(--acc-glow); }
+  100% { background: transparent; }
+}
+
+.task-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: #fff;
+}
+
+.task-icon.running { background: var(--run); box-shadow: var(--task-run-shadow); }
+.task-icon.completed { background: var(--ok); }
+.task-icon.pending { background: transparent; border: 1.5px solid var(--pend); }
+.task-icon.failed { background: var(--err); }
+.task-icon.waiting { background: transparent; border: 1.5px solid var(--dim); }
+
+.task-id {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--acc);
+  flex-shrink: 0;
+  width: 20px;
+}
+
+.task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--txt);
+}
+
+.task-title.done { color: var(--mut); }
+
+.task-assignee {
+  font-size: 10px;
+  color: var(--mut);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.task-dep-wait {
+  font-size: 9px;
+  color: var(--warn);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ─── DAG Toggle ─── */
+.dag-toggle {
+  padding: 6px 12px 10px;
+  display: flex;
+}
+
+.dag-link {
+  font-size: 10px;
+  color: var(--acc);
+  cursor: pointer;
+  opacity: .7;
+  transition: opacity .15s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dag-link:hover { opacity: 1; }
+
+/* ─── Inline DAG ─── */
+.dag-inline {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .25s ease-out, background .3s, border-color .3s;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.wf-card.dag-open .dag-inline { max-height: 200px; }
+
+.dag-inline svg {
+  display: block;
+  width: 100%;
+  padding: 10px;
+}
+
+/* ─── Completed Workflow (collapsed) ─── */
+.wf-done-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+
+.wf-done-line:hover { background: var(--hover); }
+
+.wf-done-name {
+  font-size: 11px;
+  color: var(--mut);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-done-count {
+  font-size: 10px;
+  color: var(--dim);
+}
+
+/* ─── FAB (Floating Action Button) ─── */
+.fab {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--acc);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 300;
+  box-shadow: var(--fab-shadow);
+  transition: transform .15s, box-shadow .15s;
+  z-index: 20;
+}
+
+.fab:hover {
+  transform: scale(1.08);
+  box-shadow: var(--fab-shadow-hover);
+}
+
+.fab:active { transform: scale(.95); }
+
+/* ─── Dispatch Overlay ─── */
+.overlay-bg {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(4px);
+  z-index: 30;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s;
+}
+
+.overlay-bg.open { opacity: 1; pointer-events: auto; }
+
+.dispatch-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  padding: 16px;
+  z-index: 31;
+  transform: translateY(100%);
+  transition: transform .25s ease-out, background .3s, border-color .3s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.overlay-bg.open .dispatch-panel { transform: translateY(0); }
+
+.dispatch-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dispatch-close {
+  background: none;
+  border: none;
+  color: var(--mut);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px;
+}
+
+.dispatch-close:hover { color: var(--txt); }
+
+.dispatch-label {
+  font-size: 10px;
+  color: var(--mut);
+  margin-bottom: 4px;
+  display: block;
+}
+
+.dispatch-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--txt);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font);
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+  transition: background .3s, border-color .3s, color .3s;
+}
+
+.dispatch-select:focus { border-color: var(--acc); }
+
+.dispatch-textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--txt);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font);
+  outline: none;
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.5;
+  transition: background .3s, border-color .3s, color .3s;
+}
+
+.dispatch-textarea:focus { border-color: var(--acc); }
+
+.dispatch-textarea::placeholder { color: var(--dim); }
+
+.dispatch-btn {
+  width: 100%;
+  background: var(--acc);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 9px;
+  cursor: pointer;
+  transition: filter .15s;
+}
+
+.dispatch-btn:hover { filter: brightness(1.15); }
+.dispatch-btn:disabled { background: var(--border2); color: var(--dim); cursor: not-allowed; }
+
+/* ─── Success Toast ─── */
+.toast {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  background: var(--toast-bg);
+  border: 1px solid var(--toast-border);
+  color: var(--toast-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 11px;
+  z-index: 40;
+  transform: translateY(-120%);
+  transition: transform .25s ease-out;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toast.show { transform: translateY(0); }
+
+/* ─── View Mode Toggle (preview controls) ─── */
+.preview-controls {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 100;
+}
+
+.preview-btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--mut);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all .15s, background .3s, border-color .3s, color .3s;
+}
+
+.preview-btn:hover { color: var(--txt); border-color: var(--border2); }
+.preview-btn.active { color: var(--acc); border-color: var(--acc); background: var(--acc-glow); }
+
+/* ─── Before/After Comparison ─── */
+.comparison {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.comparison-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comparison-label {
+  font-size: 11px;
+  color: var(--mut);
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+/* ─── Old Panel (Before) ─── */
+.old-panel {
+  width: 320px;
+  height: 780px;
+  max-height: calc(100vh - 80px);
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.old-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #334155;
+  flex-shrink: 0;
+}
+
+.old-top h1 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.old-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+
+.old-ctrl {
+  margin-left: auto;
+  font-size: 11px;
+  color: #94a3b8;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.old-stats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid #334155;
+  flex-shrink: 0;
+}
+
+.old-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.old-chip b { font-size: 13px; font-weight: 600; }
+
+.old-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid #334155;
+  flex-shrink: 0;
+}
+
+.old-tab {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 12px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font);
+}
+
+.old-tab.on {
+  color: #e2e8f0;
+  background: #1e293b;
+  border-bottom-color: #6366f1;
+}
+
+.old-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.old-wf {
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #1e293b;
+  overflow: hidden;
+}
+
+.old-wf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+}
+
+.old-wf-title { font-size: 13px; font-weight: 600; flex: 1; }
+
+.old-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid #475569;
+  color: #94a3b8;
+}
+
+.old-seg {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0 12px 8px;
+  background: #334155;
+}
+
+.old-seg i { display: block; height: 100%; }
+
+/* ─── Arrow between panels ─── */
+.arrow-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 380px;
+  color: var(--dim);
+  font-size: 24px;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 740px) {
+  .comparison { flex-direction: column; align-items: center; }
+  .arrow-col { padding-top: 0; transform: rotate(90deg); }
+}
+</style>
+</head>
+<body>
+
+<div class="preview-controls">
+  <button class="preview-btn" id="themeToggle" onclick="toggleTheme()" title="切换浅色/暗色主题">☀️</button>
+  <button class="preview-btn active" onclick="showNew()">优化后</button>
+  <button class="preview-btn" onclick="showOld()">优化前</button>
+  <button class="preview-btn" onclick="showCompare()">对比</button>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- NEW UI (After)                              -->
+<!-- ═══════════════════════════════════════════ -->
+<div id="newPanel" class="panel">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-row1">
+      <span class="conn-dot"></span>
+      <span class="controller-badge">Captain (Qoder)</span>
+      <span class="panel-label">Multi-Agent</span>
+    </div>
+    <div class="stats-row">
+      <div class="stat-chip run"><b>3</b>运行</div>
+      <div class="stat-chip pend"><b>2</b>待领</div>
+      <div class="stat-chip ok"><b>5</b>完成</div>
+      <div class="stat-chip err"><b>1</b>失败</div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <!-- ── Active Workflows ── -->
+    <div class="section-div">进行中 2</div>
+
+    <!-- Workflow Card 1: Expanded -->
+    <div class="wf-card active expanded" id="wf1">
+      <div class="wf-head" onclick="toggleWf('wf1')">
+        <span class="wf-dot running"></span>
+        <span class="wf-name">需求分析流程</span>
+        <span class="wf-members">
+          <span class="wf-member-dot" style="background:#6366f1" title="alice"></span>
+          <span class="wf-member-dot" style="background:#3b82f6" title="bob"></span>
+        </span>
+        <span class="wf-count">3/5</span>
+        <span class="wf-chevron">▸</span>
+      </div>
+      <div class="wf-progress">
+        <i class="seg-ok" style="width:40%"></i>
+        <i class="seg-run" style="width:20%"></i>
+        <i class="seg-pend" style="width:20%"></i>
+      </div>
+      <div class="wf-body">
+        <div class="wf-tasks">
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t1</span>
+            <span class="task-title done">收集用户需求</span>
+            <span class="task-assignee">alice</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t2</span>
+            <span class="task-title done">整理需求文档</span>
+            <span class="task-assignee">alice</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t3</span>
+            <span class="task-title done">需求评审</span>
+            <span class="task-assignee">bob</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon running"></span>
+            <span class="task-id">t4</span>
+            <span class="task-title">技术方案设计</span>
+            <span class="task-assignee">bob</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon pending"></span>
+            <span class="task-id">t5</span>
+            <span class="task-title">方案验证</span>
+            <span class="task-assignee" style="color:var(--dim)">待领取</span>
+          </div>
+        </div>
+        <div class="dag-toggle" onclick="toggleDag('wf1')">
+          <span class="dag-link">▸ 查看依赖图</span>
+        </div>
+        <div class="dag-inline">
+          <svg viewBox="0 0 280 80" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="ah" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+                <polygon points="0 0, 6 2, 0 4" fill="var(--dag-edge)"/>
+              </marker>
+            </defs>
+            <!-- edges -->
+            <line x1="68" y1="20" x2="108" y2="20" stroke="var(--dag-edge)" stroke-width="1.2" marker-end="url(#ah)"/>
+            <line x1="178" y1="20" x2="218" y2="20" stroke="var(--dag-edge)" stroke-width="1.2" marker-end="url(#ah)"/>
+            <line x1="248" y1="30" x2="248" y2="50" stroke="var(--dag-edge)" stroke-width="1.2" marker-end="url(#ah)"/>
+            <!-- nodes -->
+            <rect x="8" y="8" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#22c55e" stroke-width="1.2"/>
+            <text x="16" y="24" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t1</text>
+            <text x="30" y="24" fill="var(--dag-text-done)" font-size="7">需求</text>
+
+            <rect x="118" y="8" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#22c55e" stroke-width="1.2"/>
+            <text x="126" y="24" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t2</text>
+            <text x="140" y="24" fill="var(--dag-text-done)" font-size="7">文档</text>
+
+            <rect x="218" y="8" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#22c55e" stroke-width="1.2"/>
+            <text x="226" y="24" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t3</text>
+            <text x="240" y="24" fill="var(--dag-text-done)" font-size="7">评审</text>
+
+            <rect x="218" y="50" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="226" y="66" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t4</text>
+            <text x="240" y="66" fill="var(--dag-text-active)" font-size="7">设计</text>
+
+            <rect x="8" y="50" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#eab308" stroke-width="1.2"/>
+            <text x="16" y="66" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t5</text>
+            <text x="30" y="66" fill="var(--dag-text-active)" font-size="7">验证</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workflow Card 2: Collapsed -->
+    <div class="wf-card" id="wf2">
+      <div class="wf-head" onclick="toggleWf('wf2')">
+        <span class="wf-dot running"></span>
+        <span class="wf-name">代码重构流程</span>
+        <span class="wf-members">
+          <span class="wf-member-dot" style="background:#22c55e" title="charlie"></span>
+        </span>
+        <span class="wf-count">1/3</span>
+        <span class="wf-chevron">▸</span>
+      </div>
+      <div class="wf-progress">
+        <i class="seg-ok" style="width:33%"></i>
+        <i class="seg-run" style="width:33%"></i>
+      </div>
+      <div class="wf-body">
+        <div class="wf-tasks">
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t1</span>
+            <span class="task-title done">分析代码结构</span>
+            <span class="task-assignee">charlie</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon running"></span>
+            <span class="task-id">t2</span>
+            <span class="task-title">重构核心模块</span>
+            <span class="task-assignee">charlie</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon pending"></span>
+            <span class="task-id">t3</span>
+            <span class="task-title">编写测试用例</span>
+            <span class="task-assignee" style="color:var(--dim)">待领取</span>
+          </div>
+        </div>
+        <div class="dag-toggle" onclick="toggleDag('wf2')">
+          <span class="dag-link">▸ 查看依赖图</span>
+        </div>
+        <div class="dag-inline">
+          <svg viewBox="0 0 280 40" xmlns="http://www.w3.org/2000/svg">
+            <line x1="68" y1="20" x2="108" y2="20" stroke="var(--dag-edge)" stroke-width="1.2" marker-end="url(#ah)"/>
+            <line x1="178" y1="20" x2="218" y2="20" stroke="var(--dag-edge)" stroke-width="1.2" marker-end="url(#ah)"/>
+            <rect x="8" y="8" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#22c55e" stroke-width="1.2"/>
+            <text x="16" y="24" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t1</text>
+            <rect x="118" y="8" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="126" y="24" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t2</text>
+            <rect x="218" y="8" width="60" height="24" rx="5" fill="var(--dag-node-fill)" stroke="#eab308" stroke-width="1.2"/>
+            <text x="226" y="24" fill="var(--acc)" font-size="8" font-weight="700" font-family="monospace">t3</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Completed Workflows ── -->
+    <div class="section-div">已完成 3</div>
+
+    <div class="wf-card" id="wf3">
+      <div class="wf-done-line" onclick="toggleWf('wf3')">
+        <span class="wf-dot completed"></span>
+        <span class="wf-done-name">数据清洗流程</span>
+        <span class="wf-done-count">4/4</span>
+        <span class="wf-chevron">▸</span>
+      </div>
+      <div class="wf-body">
+        <div class="wf-tasks">
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t1</span>
+            <span class="task-title done">数据源扫描</span>
+            <span class="task-assignee">alice</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t2</span>
+            <span class="task-title done">格式标准化</span>
+            <span class="task-assignee">alice</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t3</span>
+            <span class="task-title done">异常值处理</span>
+            <span class="task-assignee">bob</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t4</span>
+            <span class="task-title done">质量报告</span>
+            <span class="task-assignee">bob</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wf-card" id="wf4">
+      <div class="wf-done-line" onclick="toggleWf('wf4')">
+        <span class="wf-dot completed"></span>
+        <span class="wf-done-name">文档生成流程</span>
+        <span class="wf-done-count">3/3</span>
+        <span class="wf-chevron">▸</span>
+      </div>
+      <div class="wf-body">
+        <div class="wf-tasks">
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t1</span>
+            <span class="task-title done">模板选择</span>
+            <span class="task-assignee">charlie</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t2</span>
+            <span class="task-title done">内容填充</span>
+            <span class="task-assignee">charlie</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t3</span>
+            <span class="task-title done">格式校验</span>
+            <span class="task-assignee">alice</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wf-card" id="wf5">
+      <div class="wf-done-line" onclick="toggleWf('wf5')">
+        <span class="wf-dot failed"></span>
+        <span class="wf-done-name">部署验证流程</span>
+        <span class="wf-done-count">2/3 · 1失败</span>
+        <span class="wf-chevron">▸</span>
+      </div>
+      <div class="wf-body">
+        <div class="wf-tasks">
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t1</span>
+            <span class="task-title done">环境检查</span>
+            <span class="task-assignee">bob</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon completed">✓</span>
+            <span class="task-id">t2</span>
+            <span class="task-title done">服务部署</span>
+            <span class="task-assignee">bob</span>
+          </div>
+          <div class="task-row">
+            <span class="task-icon failed">✗</span>
+            <span class="task-id">t3</span>
+            <span class="task-title">健康检查</span>
+            <span class="task-assignee">bob</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="height: 56px;"></div>
+  </div>
+
+  <!-- FAB -->
+  <button class="fab" onclick="openDispatch()" title="派发任务">＋</button>
+
+  <!-- Dispatch Overlay -->
+  <div class="overlay-bg" id="overlay" onclick="closeDispatchBg(event)">
+    <div class="dispatch-panel">
+      <div class="dispatch-title">
+        派发任务
+        <button class="dispatch-close" onclick="closeDispatch()">✕</button>
+      </div>
+      <div>
+        <label class="dispatch-label">Worker</label>
+        <select class="dispatch-select" id="dispatchWorker">
+          <option value="">选择 worker…</option>
+          <option value="alice">alice — 需求分析</option>
+          <option value="bob">bob — 技术实现</option>
+          <option value="charlie">charlie — 代码审查</option>
+        </select>
+      </div>
+      <div>
+        <label class="dispatch-label">Prompt</label>
+        <textarea class="dispatch-textarea" id="dispatchPrompt" placeholder="输入要执行的任务…"></textarea>
+      </div>
+      <button class="dispatch-btn" onclick="doDispatch()">派发任务</button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast">
+    <span style="font-size:13px">✓</span>
+    <span id="toastMsg">已派发 → alice</span>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- OLD UI (Before)                            -->
+<!-- ═══════════════════════════════════════════ -->
+<div id="oldPanel" class="old-panel" style="display:none;">
+  <div class="old-top">
+    <h1><span class="old-dot"></span>Multi-Agent</h1>
+    <span class="old-ctrl">Captain (Qoder)</span>
+  </div>
+  <div class="old-stats">
+    <span class="old-chip"><b style="color:#3b82f6">3</b>运行</span>
+    <span class="old-chip"><b style="color:#eab308">2</b>待领</span>
+    <span class="old-chip"><b style="color:#22c55e">5</b>完成</span>
+    <span class="old-chip"><b style="color:#ef4444">1</b>失败</span>
+  </div>
+  <div class="old-tabs">
+    <button class="old-tab on">工作流</button>
+    <button class="old-tab">任务</button>
+    <button class="old-tab">成员</button>
+    <button class="old-tab">派发</button>
+  </div>
+  <div class="old-body">
+    <div class="old-wf">
+      <div class="old-wf-head">
+        <span class="old-dot" style="width:8px;height:8px;border-radius:50%;background:#3b82f6;box-shadow:0 0 5px #3b82f6;flex-shrink:0"></span>
+        <span class="old-wf-title">需求分析流程</span>
+        <span class="old-badge">3/5</span>
+      </div>
+      <div class="old-seg">
+        <i style="width:40%;background:#22c55e"></i>
+        <i style="width:20%;background:#3b82f6"></i>
+        <i style="width:20%;background:#eab308"></i>
+      </div>
+    </div>
+    <div class="old-wf">
+      <div class="old-wf-head">
+        <span class="old-dot" style="width:8px;height:8px;border-radius:50%;background:#3b82f6;box-shadow:0 0 5px #3b82f6;flex-shrink:0"></span>
+        <span class="old-wf-title">代码重构流程</span>
+        <span class="old-badge">1/3</span>
+      </div>
+      <div class="old-seg">
+        <i style="width:33%;background:#22c55e"></i>
+        <i style="width:33%;background:#3b82f6"></i>
+      </div>
+    </div>
+    <div class="old-wf">
+      <div class="old-wf-head">
+        <span class="old-dot" style="width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0"></span>
+        <span class="old-wf-title">数据清洗流程</span>
+        <span class="old-badge">4/4</span>
+      </div>
+      <div class="old-seg">
+        <i style="width:100%;background:#22c55e"></i>
+      </div>
+    </div>
+    <div class="old-wf">
+      <div class="old-wf-head">
+        <span class="old-dot" style="width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0"></span>
+        <span class="old-wf-title">文档生成流程</span>
+        <span class="old-badge">3/3</span>
+      </div>
+      <div class="old-seg">
+        <i style="width:100%;background:#22c55e"></i>
+      </div>
+    </div>
+    <div class="old-wf">
+      <div class="old-wf-head">
+        <span class="old-dot" style="width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0"></span>
+        <span class="old-wf-title">部署验证流程</span>
+        <span class="old-badge">2/3</span>
+      </div>
+      <div class="old-seg">
+        <i style="width:66%;background:#22c55e"></i>
+        <i style="width:15%;background:#ef4444"></i>
+      </div>
+    </div>
+    <div style="color:#64748b;font-size:12px;text-align:center;padding:20px 0">
+      （需要切换到"任务"Tab 查看具体任务详情）
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Theme toggle (light/dark) ───
+function toggleTheme() {
+  const html = document.documentElement;
+  const btn = document.getElementById('themeToggle');
+  const isLight = html.getAttribute('data-theme') === 'light';
+  if (isLight) {
+    html.removeAttribute('data-theme');
+    btn.textContent = '☀️';
+    btn.title = '切换浅色主题';
+  } else {
+    html.setAttribute('data-theme', 'light');
+    btn.textContent = '🌙';
+    btn.title = '切换暗色主题';
+  }
+}
+
+// ─── Toggle workflow card expand/collapse ───
+function toggleWf(id) {
+  document.getElementById(id).classList.toggle('expanded');
+}
+
+// ─── Toggle inline DAG ───
+function toggleDag(id) {
+  const card = document.getElementById(id);
+  card.classList.toggle('dag-open');
+  const link = card.querySelector('.dag-link');
+  if (card.classList.contains('dag-open')) {
+    link.textContent = '▾ 收起依赖图';
+  } else {
+    link.textContent = '▸ 查看依赖图';
+  }
+}
+
+// ─── Dispatch overlay ───
+function openDispatch() {
+  document.getElementById('overlay').classList.add('open');
+}
+
+function closeDispatch() {
+  document.getElementById('overlay').classList.remove('open');
+}
+
+function closeDispatchBg(e) {
+  if (e.target === document.getElementById('overlay')) closeDispatch();
+}
+
+function doDispatch() {
+  const worker = document.getElementById('dispatchWorker').value;
+  const prompt = document.getElementById('dispatchPrompt').value;
+  if (!worker || !prompt.trim()) return;
+  closeDispatch();
+  const toast = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = `已派发 → ${worker}`;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2500);
+  // Reset form
+  document.getElementById('dispatchWorker').value = '';
+  document.getElementById('dispatchPrompt').value = '';
+}
+
+// ─── View mode switching ───
+function showNew() {
+  document.getElementById('newPanel').style.display = '';
+  document.getElementById('oldPanel').style.display = 'none';
+  updateBtns('new');
+}
+
+function showOld() {
+  document.getElementById('newPanel').style.display = 'none';
+  document.getElementById('oldPanel').style.display = '';
+  updateBtns('old');
+}
+
+function showCompare() {
+  document.getElementById('newPanel').style.display = '';
+  document.getElementById('oldPanel').style.display = '';
+  updateBtns('compare');
+}
+
+function updateBtns(mode) {
+  document.querySelectorAll('.preview-btn').forEach(b => b.classList.remove('active'));
+  if (mode === 'new') document.querySelectorAll('.preview-btn')[0].classList.add('active');
+  if (mode === 'old') document.querySelectorAll('.preview-btn')[1].classList.add('active');
+  if (mode === 'compare') document.querySelectorAll('.preview-btn')[2].classList.add('active');
+
+  // Layout
+  const body = document.body;
+  if (mode === 'compare') {
+    body.className = 'compare-mode';
+    // Wrap both in a comparison container
+    if (!document.getElementById('compWrap')) {
+      const wrap = document.createElement('div');
+      wrap.id = 'compWrap';
+      wrap.className = 'comparison';
+      const col1 = document.createElement('div');
+      col1.className = 'comparison-col';
+      const lbl1 = document.createElement('div');
+      lbl1.className = 'comparison-label';
+      lbl1.textContent = '优化前';
+      const col2 = document.createElement('div');
+      col2.className = 'comparison-col';
+      const lbl2 = document.createElement('div');
+      lbl2.className = 'comparison-label';
+      lbl2.textContent = '优化后';
+      const arrow = document.createElement('div');
+      arrow.className = 'arrow-col';
+      arrow.textContent = '→';
+      col1.appendChild(lbl1);
+      col1.appendChild(document.getElementById('oldPanel'));
+      col2.appendChild(lbl2);
+      col2.appendChild(document.getElementById('newPanel'));
+      wrap.appendChild(col1);
+      wrap.appendChild(arrow);
+      wrap.appendChild(col2);
+      body.appendChild(wrap);
+    }
+    document.getElementById('compWrap').style.display = '';
+  } else {
+    const wrap = document.getElementById('compWrap');
+    if (wrap) wrap.style.display = 'none';
+    // Move panels back to body
+    if (!document.getElementById('compWrap') || document.getElementById('compWrap').style.display === 'none') {
+      // panels are in body already or in hidden wrap
+    }
+  }
+}
+</script>
+
+</body>
+</html>

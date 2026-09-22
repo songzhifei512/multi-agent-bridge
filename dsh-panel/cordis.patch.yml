@@ -1,17 +1,10 @@
-name: dsh-bridge-panel
-version: 0.1.0
-description: Multi-agent bridge console panel for DSH sidebar
-main: dist/index.js
-client: dist/client.js
-inject:
-  sidebar.right.pane.tab:
-    component: ./dist/client.js
-    label: Multi-Agent
-    icon: layers
-config:
-  port:
-    type: number
-    default: 3000
-  autoStart:
-    type: boolean
-    default: true
+# Bundle patch layer: the row loads the package's main entry as the host half
+# (a plain Cordis plugin); the `dsh.client` declaration makes the web app load
+# its ./client bundle as the browser half.
+- insert:
+    - id: dsh-bridge-panel
+      name: dsh-bridge-panel
+      inject: [webServer]
+      config:
+        autoStart: true
+        port: 3000

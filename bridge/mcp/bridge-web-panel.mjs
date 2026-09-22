@@ -20,9 +20,27 @@
 
 import { readFileSync, writeFileSync, existsSync, watch } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { updateMem, KV_FILE, NOTES_FILE } from './state-store.mjs';
+import { AGENTS } from './agents-registry.mjs';
+
+/* ── 开发期自重启：本目录 .mjs 源码变化 → 退出，由宿主插件（dsh-panel host）自动拉起新版。
+   DSH 的 patchReload:"live" 只热更前端 bundle，管不到这个独立 node 子进程；
+   不加 watch 时，每次改服务端代码必须整窗重启 DSH Desktop 才生效（worker 下拉为空即此类）。 */
+const SELF_DIR = dirname(fileURLToPath(import.meta.url));
+let __reloadTimer = null;
+try {
+  watch(SELF_DIR, (_evt, filename) => {
+    if (!filename || !String(filename).endsWith('.mjs')) return;
+    clearTimeout(__reloadTimer);
+    __reloadTimer = setTimeout(() => {
+      console.log(`[panel] ${filename} changed — exiting for respawn`);
+      process.exit(0);
+    }, 400);
+  });
+} catch { /* watch 失败不影响服务 */ }
 
 const PORT = process.argv.includes('--port')
   ? parseInt(process.argv[process.argv.indexOf('--port') + 1], 10) || 3000
@@ -225,6 +243,20 @@ function panelDoAction(action, args) {
         result = { ok: true, id, msg_id: id };
         break;
       }
+      case 'archive_wf': {
+        if (!args.wf_key) { result = { ok: false, error: 'archive_wf requires wf_key' }; break; }
+        if (!m.archivedWfKeys) m.archivedWfKeys = {};
+        m.archivedWfKeys[args.wf_key] = new Date().toISOString();
+        result = { ok: true, hint: '已归档该工作流，可在「历史」视图查看' };
+        break;
+      }
+      case 'unarchive_wf': {
+        if (!args.wf_key) { result = { ok: false, error: 'unarchive_wf requires wf_key' }; break; }
+        if (!m.archivedWfKeys || !m.archivedWfKeys[args.wf_key]) { result = { ok: false, error: '该工作流未被手动归档' }; break; }
+        delete m.archivedWfKeys[args.wf_key];
+        result = { ok: true, hint: '已恢复，回到当前视图' };
+        break;
+      }
     }
   });
   return result;
@@ -322,11 +354,15 @@ function compactDagLayout(tasks, maxWidth) {
 }
 
 /* ── 构建成员活动（从任务派生 working/idle + 进度 + 耗时） ─────────── */
-const GHOST_AGENTS = new Set(['tester','agent','test','unknown','verify-agent','undefined','null','na','none','orchestrator']); // 测试/占位，不入成员列表
+const GHOST_AGENTS = new Set(['tester','agent','test','unknown','verify-agent','undefined','null','na','none','orchestrator','主控','队长']); // 测试/占位/中文角色名误标，不入成员列表
 function buildMembers(mem) {
   const entries = Object.entries(mem.tasks || {});
   const agents = new Map();
-  agents.set('claude', { agent: 'claude', claimed: 0, done: 0, failed: 0, running: 0, currentTask: '', taskList: [] });
+  // 成员 = 注册表全部 CLI（codex/claude/dsh/opencode/qwen），无任务也上卡显示空闲；
+  // 任务里出现但不在注册表的 agent 由下方循环补充。
+  for (const a of Object.keys(AGENTS)) {
+    agents.set(a, { agent: a, claimed: 0, done: 0, failed: 0, running: 0, currentTask: '', taskList: [] });
+  }
   for (const [id, t] of entries) {
     const who = t.claimed_by || t.assigned_to;
     if (!who) continue;
@@ -612,8 +648,11 @@ function buildState() {
   const dagActive = tasks.filter((t) =>
     ['running','pending','awaiting_approval','escalating'].includes(t.status)   // 存活/待办节点
     || (t.created_at && (now - new Date(t.created_at).getTime() < 60 * 3600 * 1000)) // 近 1h 新建
-  ).sort((a,b)=> (b.created_at||0)-(a.created_at||0));
-  const dagTasks = dagActive.slice(0, 25); // 最多 25 节点，进一步压缩到可一眼扫视
+  ).sort((a,b)=> (Date.parse(b.created_at)||0)-(Date.parse(a.created_at)||0)); // created_at 为 ISO 字符串，须先解析再差比（字符串相减=NaN 致排序失效，最新任务被 25 条上限挤出）
+  // 活动流截断策略：优先保证"未完成/存活"节点入图(要盯的对象)，其次补最近完成的，再割到 25。
+  const unfinished = dagActive.filter((t) => ['running','pending','awaiting_approval','escalating'].includes(t.status));
+  const finishedRecent = dagActive.filter((t) => !['running','pending','awaiting_approval','escalating'].includes(t.status));
+  const dagTasks = unfinished.concat(finishedRecent).slice(0, 25); // 最多 25 节点，未完成优先
   const dag = compactDagLayout(dagTasks, 1024);
   const mailbox = mem.mailbox || {};
   /* ── 完整收件箱时间线：全 agent 全字段（含已读/topic/kind/priority），供「Agent 消息时间线」tab ── */
@@ -660,7 +699,12 @@ function buildState() {
         tasks: list.slice().sort((a, b) => (b.status === 'running' ? 1 : 0) - (a.status === 'running' ? 1 : 0) || (b.created_at || 0) - (a.created_at || 0)).slice(0, 50),
       };
     });
-  return { stat, total: tasks.length, members, dag, tasks, workflows: buildWorkflows(tasks, now), captainSummary, agentStats, inbox, allUnread, sharedMemory, notes, controller, controllerLabel, controllerCandidates: CONTROLLER_CANDIDATES, agentOverview };
+  //  手动归档：memory.json 顶层 archivedWfKeys(wf.key→时间戳) 强制把指定工作流卡折叠进"历史"，
+  // 覆盖自动归档判定 —— 解决"full test wf"这类 pending 遗留卡永远无终态、永远占 current 的问题。
+  const wfs = buildWorkflows(tasks, now);
+  const archKeys = mem.archivedWfKeys || {};
+  for (const w of wfs.list) { if (archKeys[w.key]) { w.archived = true; w.manualArchived = true; } }
+  return { stat, total: tasks.length, members, dag, tasks, workflows: wfs, captainSummary, agentStats, inbox, allUnread, sharedMemory, notes, controller, controllerLabel, controllerCandidates: CONTROLLER_CANDIDATES, agentOverview, workers: Object.keys(AGENTS) };
 }
 
 /* ── 渲染 HTML 外壳 + 客户端轮询 ───────────────────────────────────
@@ -742,10 +786,16 @@ const HTML = `<!DOCTYPE html>
   .tnode.t-run rect{animation:dashBreathe 1.6s ease-in-out infinite}
   .tnode.t-esc rect{animation:dashBreathe 1.6s ease-in-out infinite}
   .tnode.t-pulse circle{animation:nodePulse 1.4s ease-out infinite;transform-origin:center}
+  /* 心跳停滞预警：running 节点 last_heartbeat_at 超 90s 未刷新 → 琥珀呼吸替代蓝呼吸，提示疑似卡住 */
+  .tnode.t-stale rect{stroke:#f59e0b;stroke-width:2;animation:dashBreathe 1.6s ease-in-out infinite}
+  .tnode.t-stale text{fill:#fbbf24}
   .tnode.t-term{opacity:.72}
   @keyframes dashBreathe{0%,100%{stroke-width:2}50%{stroke-width:3.4}}
   @keyframes nodePulse{0%{r:3;opacity:1}70%{r:6.5;opacity:0}100%{r:3;opacity:0}}
   .edge{fill:none;stroke:var(--line);stroke-width:1.4;transition:opacity .15s,stroke .15s}
+  .edge.edge-ok{stroke:#22c55e}
+  .edge.edge-fail{stroke:#ef4444}
+  .edge.edge-wait{stroke:#64748b;stroke-dasharray:4 3}
   .edge.dispatch{stroke:#22d3ee;stroke-width:1.4;stroke-dasharray:5 4;opacity:.75;pointer-events:stroke}
   .edge.dispatch.dim{opacity:.15}
   .edge.dispatch:active,.edge.dispatch:hover{stroke:#67e8f9;stroke-width:2}
@@ -804,6 +854,10 @@ const HTML = `<!DOCTYPE html>
   .modal-label{color:var(--mut);min-width:80px;flex-shrink:0}
   .modal-value{color:var(--txt);word-break:break-word;flex:1}
   .modal-value pre{background:var(--panel2);padding:10px;border-radius:6px;overflow:auto;max-height:300px;font-size:.8rem;white-space:pre-wrap;word-break:break-word}
+  .tl{max-height:180px;overflow:auto;font-size:.76rem;width:100%}
+  .tl-row{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--line)}
+  .tl-t{color:var(--mut);white-space:nowrap;flex:0 0 auto}
+  .tl-n{color:var(--txt);word-break:break-word}
   .mini-btn{margin-left:6px;padding:2px 8px;font-size:.68rem;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--acc);cursor:pointer;transition:background .15s}
   .mini-btn:hover{background:var(--panel);border-color:var(--acc)}
   .ses-id{font-family:ui-monospace,monospace;font-size:.74rem;color:var(--acc);background:var(--panel2);padding:1px 5px;border-radius:4px}
@@ -863,6 +917,8 @@ const HTML = `<!DOCTYPE html>
   .wf-para-collab{background:rgba(16,185,129,.15);color:#6ee7b7;border-color:rgba(16,185,129,.4)}
   .wf-para-esc{background:rgba(251,191,36,.15);color:#fcd34d;border-color:rgba(251,191,36,.4)}
   .wf-card .wf-meta{font-size:.7rem;color:var(--mut);margin-top:4px}
+  .wf-arch-btn{margin-left:auto;padding:3px 10px;font-size:.72rem;line-height:1.5;border:1px solid #f59e0b;border-radius:6px;background:rgba(245,158,11,.14);color:#fbbf24;cursor:pointer;white-space:nowrap;font-weight:600}
+  .wf-arch-btn:hover{background:#f59e0b;color:#111827}
   .wf-stepper{display:flex;gap:4px;margin-top:8px;align-items:center;overflow-x:auto;padding-bottom:2px}
   .wf-step{flex:1;min-width:0;font-size:.6rem;padding:3px 5px;border-radius:6px;text-align:center;background:var(--panel);border:1px solid var(--line);border-top:2px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .wf-step.ok{border-top-color:var(--ok);color:var(--ok)}
@@ -1126,7 +1182,7 @@ function categoryColor(n){
 }
 let allTasks=[],allMembers=[],allInbox=[],allShared=[],allNotes=[],__tlMessages=[];
 // 派工连线需排除测试/占位成员。server 同名集合在服务端逻辑区，前端须自带一份（否则 renderDAG 崩 ReferenceError）。
-const GHOST_AGENTS = new Set(['tester','agent','test','unknown','verify-agent','undefined','null','na','none','orchestrator']);
+const GHOST_AGENTS = new Set(['tester','agent','test','unknown','verify-agent','undefined','null','na','none','orchestrator','主控','队长']);
 var pinnedTaskId=null,hoverTimer=null,detailTasks=[];
 var collapsed=new Set(); // 成员卡片折叠态，跨轮询保持
 var ovOpen=new Set();    // 总览分组展开态，跨轮询保持
@@ -1206,6 +1262,24 @@ function showNoteDetail(i){
   var tag=n.tag?'['+esc(n.tag)+']':'(无标签)';
   openModal('共享笔记',row('标签','<span style="color:var(--acc)">'+tag+'</span>')+row('时间',esc(n.ts))+rowPre('内容',n.note));
 }
+// 生命周期时间线：把 attempts(重试/换手) 与 progress_log(里程碑/中断/演进) 摊平成一条可读轨迹，
+// 让"qwen失败→codex卡→interrupt→reassign→claude成功"这类换手链一眼可见(此前面板只留终态)。
+function timeline(t){
+  var rows=[];
+  var REASON_ZH={spawn_error:'启动失败(CLI未装/无法启动)',timeout:'超时',retryable_429:'限流429',fake_success:'假成功回退',nonzero_exit:'非零退出',ok:'成功'};
+  (t.retries||[]).forEach(function(r){
+    rows.push({at:null,note:'attempt#'+(r.attempt+1)+' · '+(REASON_ZH[r.reason]||r.reason||'?')+(r.spawn_error?(' · '+r.spawn_error):'')+(r.model&&r.model!=='(default)'?(' · '+r.model):'')});
+  });
+  (t.progress_log||[]).forEach(function(p){
+    rows.push({at:p.ts||p.at||null,note:p.note||p.action||String(p)});
+  });
+  if(!rows.length)return '';
+  var html=rows.map(function(r){
+    var tstr=r.at?('<span class="tl-t">'+new Date(r.at).toLocaleString('zh-CN')+'</span>'):'';
+    return '<div class="tl-row">'+tstr+'<span class="tl-n">'+esc(r.note)+'</span></div>';
+  }).join('');
+  return '<div class="modal-row"><span class="modal-label">生命周期</span><div class="modal-value"><div class="tl">'+html+'</div></div></div>';
+}
 function showTaskDetail(i){
   var t=allTasks[i];
   if(!t)return;
@@ -1217,7 +1291,7 @@ function showTaskDetail(i){
   var created=t.created_at?new Date(t.created_at).toLocaleString('zh-CN'):'-';
   var sesRow=t.session_id?row('会话', '<code class="ses-id">'+esc(t.session_id)+'</code> <button class="mini-btn" onclick="copySes(\\''+esc(t.session_id).replace(/'/g,"\\'")+'\\',\\'copied-'+esc(t.id).slice(-6)+'\\')">复制</button> <span class="ses-copied" id="copied-'+esc(t.id).slice(-6)+'"></span>'):'';
   var whoBtn='<button class="mini-btn" onclick="showMemberByAgent(\\''+esc(t.claimed_by||t.assigned_to||'')+'\\')">👤 成员</button>';
-  openModal('任务详情 — '+esc(t.id),row('任务 ID',esc(t.id))+row('标题',esc(t.title))+row('状态',status)+row('负责人',esc(t.assigned_to||'未分配')+' '+whoBtn)+row('认领者',esc(t.claimed_by||'-'))+row('创建时间',created)+row('依赖',dep)+sesRow+row('结果',result)+actionBar(t));
+  openModal('任务详情 — '+esc(t.id),row('任务 ID',esc(t.id))+row('标题',esc(t.title))+row('状态',status)+row('负责人',esc(t.assigned_to||'未分配')+' '+whoBtn)+row('认领者',esc(t.claimed_by||'-'))+row('创建时间',created)+row('依赖',dep)+sesRow+row('结果',result)+timeline(t)+actionBar(t));
 }
 // 可编辑动作条：按状态给候选动作，落到 /api/action 写端
 function actionBar(t){
@@ -1439,8 +1513,11 @@ function renderDAG(dag){
   for(var ei=0;ei<dag.edges.length;ei++){
     var e=dag.edges[ei];
     if(dagStFilter&&(!keepMap[e.from]||!keepMap[e.to]))continue;
+    var ef = dag.nodes.find(function(x){return x.id===e.from});
+    var depOk = ef && ef.status==='completed';
+    var depFail = ef && (ef.status==='failed'||ef.status==='superseded');
     var pe=document.createElementNS(NS,'path');
-    pe.setAttribute('class','edge');pe.setAttribute('data-f',e.from);pe.setAttribute('data-t',e.to);
+    pe.setAttribute('class','edge'+(depOk?' edge-ok':depFail?' edge-fail':' edge-wait'));pe.setAttribute('data-f',e.from);pe.setAttribute('data-t',e.to);
     pe.setAttribute('d',e.path);pe.setAttribute('transform','translate('+pad+','+pad+')');svg.appendChild(pe);
   }
   /* ──  队长→成员派工连线：creator≠assignee 且 creator 有节点时画青色虚线，落主控/人工下达语义 ── */
@@ -1503,9 +1580,11 @@ function renderDAG(dag){
     if(disp)st='disp';
     var term = st==='superseded'||st==='cancelled';
     if(term)st='term';
+    // 心跳停滞预警：running 且 last_heartbeat_at 超 90s 未刷新 → 疑似"假卡/进程 hang 不退出"
+    var hbStale = st==='running' && Tft.last_heartbeat_at && (Date.now()-Tft.last_heartbeat_at) > 90000;
     var g=document.createElementNS(NS,'g');
     g.setAttribute('class','tnode'+(st==='running'?' t-run':st==='escalating'?' t-esc':'')
-      +(term?' t-term':'')+(disp?' t-disp':''));
+      +(hbStale?' t-stale':'')+(term?' t-term':'')+(disp?' t-disp':''));
     g.setAttribute('data-id',n.id);g.setAttribute('data-idx',ni);
     g.setAttribute('transform','translate('+(n.x+pad)+','+(n.y+pad)+')');
     // 状态主记：左缘竖条(状态色) + 节点填充(类别淡色) + 描边(状态色)
@@ -1530,7 +1609,7 @@ function renderDAG(dag){
     // 标题（第1行）：取 shortLabel，运行/待批前加状态符号
     var t1=document.createElementNS(NS,'text');
     t1.setAttribute('x','9');t1.setAttribute('y','14');t1.setAttribute('fill',svgTxt());t1.setAttribute('font-size','8.5');t1.setAttribute('font-weight','600');
-    var sym = st==='running'?'▶ ':st==='escalating'?'⚠ ':st==='awaiting_approval'?'⏸ ':st==='appr'?'⏸ ':disp?'→ ':'';
+    var sym = st==='running'?(hbStale?'⏳ ':'▶ '):st==='escalating'?'⚠ ':st==='awaiting_approval'?'⏸ ':st==='appr'?'⏸ ':disp?'→ ':'';
     //  演进徽标：fork 分支=⊕(备选换 agent)，append 追加=＋(后置连完成尾段)，
     // insert 前置插=⟳(fork 补丁+重算依赖)，repoint 重连=↻。区分"原规划"节点。
     // 主 kind 优先；fork 分支若又经 repoint(sub.kind=repoint)则主徽标仍 ⊕、标题前缀补 ↻ 表示二次演进。
@@ -1834,8 +1913,12 @@ function renderWorkflows(wfs){
       +'<span class="lg ok">●进行中</span><span class="lg disp">●已派发</span>'
       +'<span class="lg pend">●待领取</span><span class="lg appr">●待批</span>'
       +'<span class="lg ok2">●已交付</span><span class="lg term">●已结束</span></div>';
+    //  手动归档按钮：current 卡给「归档」，history 卡给「恢复」；stopPropagation 避免触发卡片聚焦
+    var archBtn = historic
+      ? '<button class="wf-arch-btn" onclick="archiveWf(\\''+esc(wf.key)+'\\',0);event.stopPropagation()" title="取消归档，回到当前视图">↩ 恢复</button>'
+      : '<button class="wf-arch-btn" onclick="archiveWf(\\''+esc(wf.key)+'\\',1);event.stopPropagation()" title="归档：不再占用当前视图（可在「历史」查看）">归档</button>';
     return '<div class="wf-card'+(historic?' wf-arch':'')+act+'" onclick="pickWf(\\''+esc(wf.key)+'\\')">'+
-      '<div class="wf-head"><span class="wf-title">'+esc(wf.title)+'</span>'+shellBadge+paraBadge+escBadge+'<span class="wf-tpl">'+esc(wf.tpl)+'</span></div>'+
+      '<div class="wf-head"><span class="wf-title">'+esc(wf.title)+'</span>'+shellBadge+paraBadge+escBadge+'<span class="wf-tpl">'+esc(wf.tpl)+'</span>'+archBtn+'</div>'+
       '<div class="wf-meta">'+meta+'</div>'+
       '<div class="wf-stepper">'+steps+'</div>'+
       legend+
@@ -1857,6 +1940,12 @@ function renderWorkflows(wfs){
   }
 }
 function pickWf(key){ currentWfKey=key; var sel=document.getElementById('wf-filter'); if(sel)sel.value=key; if(lastState)renderFromState(lastState); }
+function archiveWf(key, archive){
+  fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:archive?'archive_wf':'unarchive_wf',wf_key:key})})
+    .then(function(r){return r.json()})
+    .then(function(res){ if(lastState)renderFromState(lastState); })
+    .catch(function(){});
+}
 /* 当前/历史切换：互斥切换两个视图，状态跨轮询保持（session 内） */
 function wfSwitch(view){
   wfView=view;

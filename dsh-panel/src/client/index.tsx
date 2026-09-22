@@ -1,103 +1,107 @@
-import React, { useState, useEffect } from 'react';
-import { useSessionFilter } from './hooks/useSessionFilter';
-import { useSSESubscription } from './hooks/useSSESubscription';
-import { TaskList } from './components/TaskList';
-import { WorkerStats } from './components/WorkerStats';
-import { DispatchForm } from './components/DispatchForm';
-import { EventStream } from './components/EventStream';
-
-interface Task {
-  id: string;
-  status: string;
-  progress?: number;
-  session?: string;
-  [key: string]: any;
-}
-
-interface WorkerStatus {
-  name: string;
-  healthy: boolean;
-  lastHeartbeat: string;
-}
-
-// 模拟从 DSH context 获取 session ID
-function useDSHSession() {
-  // 实际实现需要从 DSH 的 React context 或 global state 读取
-  return 'current-session-id';
-}
+import React, { useCallback, useState } from 'react';
+import { useBridgeState } from './hooks/useBridgeState';
+import { injectStyles } from './styles';
+import { StickyHeader } from './components/StickyHeader';
+import { WorkflowCard } from './components/WorkflowCard';
+import { FAB, DispatchOverlay, Toast } from './components/DispatchOverlay';
 
 export default function BridgeConsoleTab() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [workers, setWorkers] = useState<WorkerStatus[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  injectStyles();
+  const { state, connected } = useBridgeState();
+  const [dispatchOpen, setDispatchOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
-  const sessionId = useDSHSession();
-  const filteredTasks = useSessionFilter(tasks, sessionId);
-  const events = useSSESubscription(sessionId);
+  const stat = state?.stat || {};
+  const workflows = state?.workflows?.list || [];
 
-  // 轮询 /api/state
-  useEffect(() => {
-    const fetchState = async () => {
-      try {
-        const res = await fetch(`/api/state${sessionId ? `?session=${sessionId}` : ''}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        setTasks(data.tasks || []);
-        setWorkers(data.workers || []);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      }
-    };
+  // 分为活跃和已完成两组
+  const active = workflows.filter(
+    w => !w.archived && (w.running > 0 || w.pending > 0 || w.failed > 0),
+  );
+  const completed = workflows.filter(
+    w => !w.archived && w.running === 0 && w.pending === 0 && w.failed === 0,
+  );
 
-    fetchState();
-    const interval = setInterval(fetchState, 3000);
-    return () => clearInterval(interval);
-  }, [sessionId]);
+  const memberLabel = useCallback(
+    (agent: string) =>
+      state?.members?.find((m: any) => m.agent === agent)?.label || '',
+    [state?.members],
+  );
 
-  const handleDispatch = async (workerName: string, promptText: string) => {
-    const res = await fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        worker: workerName,
-        prompt: promptText,
-        session: sessionId,
-      }),
-    });
+  const handleDispatch = useCallback(
+    async (worker: string, prompt: string) => {
+      const res = await fetch('/bridge/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ worker, prompt }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      return data?.taskId as string | undefined;
+    },
+    [],
+  );
 
-    if (!res.ok) {
-      const error = await res.json();
-      throw new Error(error.error || 'Dispatch failed');
-    }
-
-    const result = await res.json();
-    console.log('Task dispatched:', result.taskId);
-  };
-
-  if (error) {
-    return (
-      <div style={{ padding: '20px', color: 'red' }}>
-        <h3>连接错误</h3>
-        <pre>{error}</pre>
-        <button onClick={() => window.location.reload()}>刷新页面</button>
-      </div>
-    );
-  }
+  const handleDispatched = useCallback((worker: string, taskId?: string) => {
+    setToast(`已派发 → ${worker}`);
+  }, []);
 
   return (
-    <div style={{ padding: '20px', maxHeight: '100vh', overflowY: 'auto' }}>
-      <h2>Multi-Agent Console</h2>
-      <p style={{ fontSize: '12px', color: '#666' }}>Session: {sessionId}</p>
-
-      <DispatchForm
-        workers={workers.map(w => ({ name: w.name, healthy: w.healthy }))}
-        onDispatch={handleDispatch}
+    <div className="ma-root">
+      <StickyHeader
+        stat={stat}
+        connected={connected}
+        controller={state?.controller}
+        controllerLabel={state?.controllerLabel}
       />
 
-      <TaskList tasks={filteredTasks} />
-      <WorkerStats workers={workers} />
-      <EventStream events={events} />
+      <div className="ma-body">
+        {active.length === 0 && completed.length === 0 && (
+          <div className="ma-empty">当前没有活动工作流</div>
+        )}
+
+        {active.length > 0 && (
+          <>
+            <div className="ma-section">进行中 ({active.length})</div>
+            {active.map(wf => (
+              <WorkflowCard
+                key={wf.key}
+                wf={wf}
+                memberLabel={memberLabel}
+                isActive={true}
+              />
+            ))}
+          </>
+        )}
+
+        {completed.length > 0 && (
+          <>
+            <div className="ma-section">已完成 ({completed.length})</div>
+            {completed.map(wf => (
+              <WorkflowCard
+                key={wf.key}
+                wf={wf}
+                memberLabel={memberLabel}
+                isActive={false}
+              />
+            ))}
+          </>
+        )}
+
+        <FAB onClick={() => setDispatchOpen(true)} />
+
+        <DispatchOverlay
+          workers={state?.workers || []}
+          open={dispatchOpen}
+          onClose={() => setDispatchOpen(false)}
+          onDispatch={handleDispatch}
+          onDispatched={handleDispatched}
+        />
+
+        {toast && (
+          <Toast message={toast} onDone={() => setToast(null)} />
+        )}
+      </div>
     </div>
   );
 }

@@ -91,9 +91,11 @@ function runOnce(agent, args, timeoutMs) {
       let m;
       while ((m = MILESTONE_RE.exec(s))) noteMilestone(m[1].trim());
     };
+    let lastOutputAt = Date.now();  // 心跳停滞检测：stdout 最后更新时间
     const append = (d) => {
       const s = d.toString();
       out += s;
+      lastOutputAt = Date.now();
       if (out.length > KEEP_RECENT) out = out.slice(-KEEP_RECENT); // keepRecent：只留尾部，中间历史压缩丢弃
       //  里程碑解析：把新块与上一块尾部拼接再扫（避免标记被 chunk 边界切半）。
       // mileBuf 保留可能含未完成标记的尾部最多 ~2KB；无 `§MILESTONE`/`` 开头片段则清空。
@@ -116,6 +118,22 @@ function runOnce(agent, args, timeoutMs) {
       try { child.kill(); } catch {}
       res({ code: null, out, sessionId: null, timedOut: true, spawnError: null });
     }, timeoutMs);
+    // 假卡提前收口：进程已输出完整结果但静默 QUIET_MS 仍不退出 → 判定"答完 hang"，
+    // 主动按当前 out settle（code=0），避免任务卡 running 到 timeout（codex 曾 2s 答完却 hang 满 timeout）。
+    const QUIET_MS = parseInt(process.env.BRIDGE_QUIET_MS, 10) || 20000;
+    const quietTimer = setInterval(() => {
+      if (settled) { clearInterval(quietTimer); return; }
+      if (Date.now() - lastOutputAt < QUIET_MS) return;
+      const p = agent.parse ? agent.parse(out) : { text: out, sessionId: null };
+      if (!p.text || !String(p.text).trim()) return;   // 无实质结果不误收口（仍在思考）
+      settled = true;
+      clearInterval(quietTimer);
+      clearTimeout(timer);
+      if (hb) clearInterval(hb);
+      try { child.kill(); } catch {}
+      res({ code: 0, out, sessionId: p.sessionId, timedOut: false, spawnError: null });
+    }, 5000);
+    if (quietTimer.unref) quietTimer.unref();
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
@@ -190,6 +208,7 @@ export function runAgent(name, args, opts = {}) {
       last_heartbeat_at: Date.now(),   // runAgent 建的记录直接在 running 态起跳
       heartbeat_n: 0,
       heartbeat_interval_ms: null,     // 用全局默认 BRIDGE_HEARTBEAT_MS
+      timeout_sec: args.timeout_sec || 300,  // 短任务卡顿阈值分层用（sweepStaleRunning 据此缩短 stale 阈值）
       progress_log: prev.progress_log || [],  // 保留既有进度留痕
       escalation: null,
       // 跨重跑保留工作流/审点挂链（auto-fork 判断归属 + DAG 面板不丢边）：
@@ -218,7 +237,7 @@ export function runAgent(name, args, opts = {}) {
     // <PROVIDER>-Flash/Qwen3-Coder-Flash 仍可用）。modelQueue = [首次model, ...fallbackModels]；
     // 429 的下一 attempt 用队列下一个 model。非 429（timeout）仍用同 model 退避重试。
     // 总尝试受 maxRetries 约束；model 轮转不额外增加尝试次数，只在 429 重试时换 model。
-    const fallbackModels = Array.isArray(agent.fallbackModels) ? agent.fallbackModels : [];
+    const fallbackModels = (Array.isArray(agent.fallbackModels) ? agent.fallbackModels : []).filter((m) => m && !/[<>]/.test(String(m)));
     const firstModel = args.model || null; // null = 用 agent 默认（buildFresh 内部处理）
     const modelQueue = [firstModel, ...fallbackModels];
 
@@ -313,7 +332,11 @@ export function runAgent(name, args, opts = {}) {
     // Settle the task record with the final outcome + the retry trace.
     const parsed = agent.parse(lastOut);
     const finalSessionId = parsed.sessionId || lastSessionId;
-    const display = parsed.text.slice(0, 200000);
+    //  失败可读化：spawn error（CLI 命令不存在/无法启动，如 "qwen 不是内部或外部命令"）时，
+    // stdout 常是 Windows cmd 的 GBK 乱码，面板/主控读不懂真实原因。用可读 spawnError 覆盖。
+    const display = lastSpawnError != null
+      ? `[spawn_error] ${lastSpawnError} · worker CLI 未找到或无法启动，请先 agent_scan 核对本机安装`
+      : parsed.text.slice(0, 200000);
     // success requires exit 0 AND the last attempt was not a fake_success (exit 0 with an
     // API-error body that exhausted retries). A final fake_success means every fallback
     // also failed — mark failed so the caller sees the error instead of a silent "completed".
@@ -338,7 +361,7 @@ export function runAgent(name, args, opts = {}) {
         m.tasks[taskId].status = "interrupted";
         m.tasks[taskId].completed_at = new Date().toISOString();
         m.tasks[taskId].exit_code = lastCode;
-        m.tasks[taskId].result = parsed.text.slice(0, 200000);
+        m.tasks[taskId].result = display;
         if (finalSessionId) m.tasks[taskId].session_id = finalSessionId;
         m.tasks[taskId].retries = attempts;
         delete m.tasks[taskId].agent_live;
@@ -349,7 +372,7 @@ export function runAgent(name, args, opts = {}) {
       m.tasks[taskId].exit_code = lastCode;
       // Result cap raised 500→200000 so multi-TB/perspective eval texts are preserved intact.
       // (500 chars truncated the claude/codex perspective assessments and lost the body.)
-      m.tasks[taskId].result = parsed.text.slice(0, 200000);
+      m.tasks[taskId].result = display;
       if (autoRefused) m.tasks[taskId].auto_refused = safetyScan(parsed.text).hits;
       else delete m.tasks[taskId].auto_refused;
       //  推理轨迹捕获：capture_trace=true 时把完整推理 step 流（含中间日志/思考）存进

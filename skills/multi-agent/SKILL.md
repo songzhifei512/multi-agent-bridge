@@ -1,6 +1,6 @@
 ---
 name: multi-agent
-description: 用 multi-agent-bridge（57 个协作工具）把多个 Agent CLI（claude / codex / qwen / opencode / dsh）编排成协作团队。核心两条主线：(1) 按竞争式(compete) / 合作式(collaborate) / 动态路由(dynamic)三种协作范式搭建工作流 DAG（workflow_plan → workflow_start → workflow_evolve）；(2) 自动把每个挂载 Agent 的工作记忆回写到 shared-memory（向量语义记忆 memory_* + 键值 shared_memory_* + 交接笔记 shared_notes_*），供主控与任意 Agent 做记忆召回、复用他人工作记忆。当用户要「多个 Agent 协作完成一个目标」「多视角选型/评审后再收敛」「自动沉淀各 Agent 产出到共享记忆」「跨 Agent 交接知识」时使用本技能。
+description: 用 multi-agent-bridge（58 个协作工具）把多个 Agent CLI（claude / codex / qwen / opencode / dsh / qoder / qoder_cn）编排成协作团队。核心两条主线：(1) 按竞争式(compete) / 合作式(collaborate) / 动态路由(dynamic)三种协作范式搭建工作流 DAG（workflow_plan → workflow_start → workflow_evolve）；(2) 自动把每个挂载 Agent 的工作记忆回写到 shared-memory（向量语义记忆 memory_* + 键值 shared_memory_* + 交接笔记 shared_notes_*），供主控与任意 Agent 做记忆召回、复用他人工作记忆。当用户要「多个 Agent 协作完成一个目标」「多视角选型/评审后再收敛」「自动沉淀各 Agent 产出到共享记忆」「跨 Agent 交接知识」时使用本技能。
 ---
 
 # multi-agent 多 Agent 协作技能
@@ -15,11 +15,11 @@ description: 用 multi-agent-bridge（57 个协作工具）把多个 Agent CLI�
 
 | 步骤 | 工具 | 说明 |
 | --- | --- | --- |
-| 探测本机 worker 可用性 | `agent_scan` | 识别 claude/codex/qwen/opencode/dsh 是否可加入，`available=false` 会被派发拒绝 |
+| 探测本机 worker 可用性 | `agent_scan` | 识别 claude/codex/qwen/opencode/dsh/qoder 是否可加入，`available=false` 会被派发拒绝 |
 | 列出注册表与能力 | `agent_list` | 每行 name + `(auto: yes)` + 能力/强弱项，用于选型 |
 | 读历史战绩 | `agent_eval` | 按 agent 聚合完成率/平均质量分/平均时长/重试/满意度，用于任务路由决策 |
 
-选型经验：推理/架构 → claude；批量代码/补丁 → codex；文档/PPT/图像 → qwen；备路/并发 → opencode/dsh。不要把主控（`BRIDGE_CONTROLLER`）压给重活——长任务用 `agent_invoke` 派给空闲 worker。
+选型经验：推理/架构 → claude；批量代码/补丁 → codex；文档/PPT/图像 → qwen；全栈编程+中文场景/代码审查 → qoder；国内合规+低延迟 → qoder_cn；备路/并发 → opencode/dsh。不要把主控（`BRIDGE_CONTROLLER`）压给重活——长任务用 `agent_invoke` 派给空闲 worker。
 
 ## 1. 三种协作范式总览
 

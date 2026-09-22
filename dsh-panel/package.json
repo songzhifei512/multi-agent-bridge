@@ -2,13 +2,30 @@
   "name": "dsh-bridge-panel",
   "version": "0.1.0",
   "type": "module",
+  "main": "dist/index.js",
   "exports": {
-    ".": "./dist/index.js",
-    "./client": "./dist/client.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": "./dist/client.js",
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --format=esm --external:@cordis/types --external:react --external:react-dom && esbuild src/client/index.tsx --bundle --platform=browser --outfile=dist/client.js --format=esm --external:@cordis/types --external:react --external:react-dom",
-    "dev": "npm run build -- --watch"
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ],
+      "platform": "web"
+    }
   },
   "devDependencies": {
     "@types/react": "^18.2.0",
@@ -17,6 +34,7 @@
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2",
     "react": "^18.0.0",
     "react-dom": "^18.0.0"
   },

@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dsh-panel Qoder CN Adaptation Preview</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #0f1117; color: #e2e8f0; height: 100vh; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+
+/* ===== Title Bar ===== */
+.title-bar {
+  height: 32px; background: #1a1b26; display: flex; align-items: center;
+  padding: 0 12px; border-bottom: 1px solid #2a2d3a; flex-shrink: 0;
+  font-size: 12px; color: #94a3b8;
+}
+.title-bar .dots { display: flex; gap: 6px; margin-right: 12px; }
+.title-bar .dot { width: 10px; height: 10px; border-radius: 50%; }
+.title-bar .dot.r { background: #ef4444; }
+.title-bar .dot.y { background: #f59e0b; }
+.title-bar .dot.g { background: #22c55e; }
+.title-bar .title { flex: 1; text-align: center; }
+
+/* ===== Main Layout ===== */
+.main-layout { display: flex; flex: 1; overflow: hidden; }
+
+/* ===== Left Navigation Bar (Qoder CN Activity Bar) ===== */
+.nav-bar {
+  width: 48px; background: #14151f; display: flex; flex-direction: column;
+  align-items: center; padding: 8px 0; border-right: 1px solid #2a2d3a;
+  flex-shrink: 0; gap: 2px;
+}
+.nav-icon {
+  width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; cursor: pointer; color: #64748b; position: relative;
+  transition: all 0.15s;
+}
+.nav-icon:hover { color: #94a3b8; background: rgba(255,255,255,0.04); }
+.nav-icon.active {
+  color: #e2e8f0; background: rgba(99,102,241,0.12);
+}
+.nav-icon.active::before {
+  content: ''; position: absolute; left: -4px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 20px; background: #6366f1; border-radius: 0 2px 2px 0;
+}
+.nav-icon svg { width: 20px; height: 20px; }
+.nav-icon .badge {
+  position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+  background: #22c55e; border-radius: 50%; border: 1.5px solid #14151f;
+}
+.nav-spacer { flex: 1; }
+
+/* ===== Secondary Sidebar (Left Panel) ===== */
+.secondary-sidebar {
+  width: 220px; background: #181924; border-right: 1px solid #2a2d3a;
+  display: flex; flex-direction: column; flex-shrink: 0;
+}
+.sidebar-header {
+  padding: 12px 14px; font-size: 11px; font-weight: 600; color: #64748b;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  border-bottom: 1px solid #2a2d3a;
+}
+.sidebar-section { padding: 8px; }
+.sidebar-section h4 {
+  font-size: 11px; color: #64748b; font-weight: 600;
+  padding: 4px 8px; margin-bottom: 2px;
+}
+.sidebar-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-radius: 6px; cursor: pointer; font-size: 12px; color: #94a3b8;
+  transition: all 0.1s;
+}
+.sidebar-item:hover { background: rgba(255,255,255,0.04); color: #e2e8f0; }
+.sidebar-item.active { background: rgba(99,102,241,0.1); color: #a5b4fc; }
+.sidebar-item .dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.sidebar-item .count {
+  margin-left: auto; font-size: 10px; color: #64748b;
+  background: #252636; padding: 1px 6px; border-radius: 999px;
+}
+
+/* ===== Workbench (Main Content Area) ===== */
+.workbench {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  background: #0f1117;
+}
+.workbench-header {
+  display: flex; align-items: center; padding: 10px 16px;
+  border-bottom: 1px solid #2a2d3a; flex-shrink: 0;
+}
+.workbench-header h2 {
+  font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+}
+.workbench-header .status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+.workbench-header .status-dot.on { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+.workbench-header .controller {
+  margin-left: auto; font-size: 11px; color: #94a3b8;
+  background: #1e2030; border: 1px solid #2a2d3a; border-radius: 999px;
+  padding: 2px 10px;
+}
+
+/* ===== Stats Bar ===== */
+.stats-bar {
+  display: flex; gap: 6px; padding: 8px 16px; border-bottom: 1px solid #2a2d3a;
+  flex-shrink: 0; flex-wrap: wrap;
+}
+.stat-chip {
+  display: flex; align-items: baseline; gap: 5px; padding: 3px 10px;
+  border-radius: 999px; background: #1e2030; border: 1px solid #2a2d3a;
+  font-size: 11px; color: #94a3b8;
+}
+.stat-chip b { font-size: 13px; font-weight: 600; }
+.stat-chip.run b { color: #3b82f6; }
+.stat-chip.pend b { color: #eab308; }
+.stat-chip.ok b { color: #22c55e; }
+.stat-chip.err b { color: #ef4444; }
+
+/* ===== Tab Bar ===== */
+.tab-bar {
+  display: flex; gap: 2px; padding: 6px 12px 0;
+  border-bottom: 1px solid #2a2d3a; flex-shrink: 0;
+}
+.tab {
+  font-size: 12px; font-weight: 500; padding: 7px 14px;
+  border-radius: 8px 8px 0 0; cursor: pointer; border: none;
+  background: transparent; color: #94a3b8; border-bottom: 2px solid transparent;
+  transition: all 0.1s;
+}
+.tab:hover { color: #e2e8f0; background: #1e2030; }
+.tab.active { color: #e2e8f0; background: #1e2030; border-bottom-color: #6366f1; }
+
+/* ===== Tab Content ===== */
+.tab-content { flex: 1; overflow-y: auto; padding: 12px 16px; }
+.tab-content::-webkit-scrollbar { width: 6px; }
+.tab-content::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+/* ===== Workflow Cards ===== */
+.wf-card {
+  border: 1px solid #2a2d3a; border-radius: 10px; background: #1e2030;
+  overflow: hidden; margin-bottom: 10px;
+}
+.wf-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  cursor: pointer;
+}
+.wf-head:hover { background: #252636; }
+.wf-title { font-size: 13px; font-weight: 600; flex: 1; }
+.wf-badge {
+  font-size: 10px; font-weight: 600; padding: 1px 8px;
+  border-radius: 999px; border: 1px solid;
+}
+.wf-badge.progress { color: #94a3b8; border-color: #475569; }
+.wf-badge.compete { color: #f472b6; border-color: #f472b6; }
+.wf-badge.collab { color: #38bdf8; border-color: #38bdf8; }
+.wf-badge.dag { color: #94a3b8; border-color: #475569; cursor: pointer; }
+.wf-badge.dag.on { color: #6366f1; border-color: #6366f1; }
+.wf-badge.archive {
+  color: #fbbf24; border-color: #f59e0b; background: rgba(245,158,11,0.1);
+  cursor: pointer;
+}
+
+/* Progress Segment */
+.wf-seg { display: flex; height: 5px; border-radius: 3px; overflow: hidden; margin: 0 14px 6px; background: #2a2d3a; }
+.wf-seg i { display: block; height: 100%; }
+.wf-seg i.run { background: #3b82f6; }
+.wf-seg i.ok { background: #22c55e; }
+.wf-seg i.pend { background: #eab308; }
+.wf-seg i.err { background: #ef4444; }
+.wf-seg i.blk { background: #f59e0b; }
+.wf-leg { display: flex; gap: 10px; padding: 0 14px 8px; font-size: 10px; color: #94a3b8; flex-wrap: wrap; }
+.wf-leg span { display: flex; align-items: center; gap: 4px; }
+.wf-leg em { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
+
+/* Swim Lanes */
+.lanes { border-left: 2px solid #475569; margin: 4px 14px 12px 16px; padding-left: 12px; }
+.lane { margin-bottom: 10px; }
+.lane-head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 4px; }
+.lane-head b { font-weight: 600; }
+.lane-head .role { font-size: 10px; color: #64748b; }
+.lane-task {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  background: #252636; border: 1px solid #2a2d3a; border-radius: 7px;
+  padding: 4px 8px; margin-bottom: 4px;
+}
+.lane-task .st { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.st-running { background: #3b82f6; box-shadow: 0 0 5px #3b82f6; }
+.st-completed { background: #22c55e; }
+.st-pending { background: #eab308; }
+.st-failed { background: #ef4444; }
+.lane-task .tid { font-weight: 700; color: #6366f1; font-size: 10px; }
+.lane-task .tt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lane-task .wait { font-size: 10px; color: #f59e0b; }
+
+/* ===== Members Grid ===== */
+.members-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mem-card {
+  border: 1px solid #2a2d3a; border-radius: 10px; background: #1e2030; padding: 10px 12px;
+}
+.mem-card .nm { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; font-family: ui-monospace, monospace; }
+.mem-card .role { font-size: 10px; color: #94a3b8; margin: 2px 0; }
+.mem-card .act { font-size: 10px; color: #64748b; }
+.mem-card .row { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 2px; }
+.mem-card .prog { height: 3px; background: #2a2d3a; border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.mem-card .prog i { display: block; height: 100%; background: #6366f1; }
+
+/* ===== Dispatch Form ===== */
+.dispatch-form { display: flex; flex-direction: column; gap: 10px; max-width: 500px; }
+.dispatch-form label { font-size: 11px; color: #94a3b8; display: flex; flex-direction: column; gap: 4px; }
+.dispatch-form select, .dispatch-form textarea {
+  background: #252636; border: 1px solid #475569; border-radius: 8px;
+  color: #e2e8f0; padding: 8px 10px; font-size: 12px; font-family: inherit; outline: none;
+}
+.dispatch-form select:focus, .dispatch-form textarea:focus { border-color: #6366f1; }
+.dispatch-form textarea { min-height: 80px; resize: vertical; }
+.dispatch-btn {
+  border: none; border-radius: 8px; background: #6366f1; color: #fff;
+  font-size: 12px; font-weight: 600; padding: 8px 16px; cursor: pointer;
+  width: fit-content;
+}
+.dispatch-btn:hover { filter: brightness(1.1); }
+
+/* ===== Annotation Overlay ===== */
+.annotation {
+  position: fixed; z-index: 100; pointer-events: none;
+}
+.anno-box {
+  background: rgba(99,102,241,0.15); border: 1.5px dashed #6366f1;
+  border-radius: 8px; padding: 4px 8px;
+}
+.anno-label {
+  position: absolute; background: #6366f1; color: #fff; font-size: 10px;
+  font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+}
+.anno-label.top { bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 4px; }
+.anno-label.left { right: 100%; top: 50%; transform: translateY(-50%); margin-right: 4px; }
+
+/* ===== Comparison Layout ===== */
+.comparison {
+  display: flex; gap: 0; height: 100%;
+}
+.comparison > .side {
+  flex: 1; display: flex; flex-direction: column; position: relative;
+  overflow: hidden;
+}
+.comparison > .side:first-child { border-right: 2px solid #6366f1; }
+.side-label {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+  background: linear-gradient(180deg, rgba(99,102,241,0.2) 0%, transparent 100%);
+  padding: 6px 14px; font-size: 11px; font-weight: 600; color: #a5b4fc;
+  text-align: center; pointer-events: none;
+}
+
+/* ===== Toggle Buttons ===== */
+.view-toggle {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 200; display: flex; gap: 4px; background: #1e2030;
+  border: 1px solid #2a2d3a; border-radius: 10px; padding: 4px;
+}
+.view-toggle button {
+  border: none; border-radius: 7px; padding: 6px 14px; font-size: 12px;
+  font-weight: 500; cursor: pointer; background: transparent; color: #94a3b8;
+}
+.view-toggle button.active { background: #6366f1; color: #fff; }
+</style>
+</head>
+<body>
+
+<!-- Title Bar -->
+<div class="title-bar">
+  <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+  <div class="title">Qoder CN - Multi-Agent Bridge Panel Adaptation Preview</div>
+</div>
+
+<!-- View Toggle -->
+<div class="view-toggle">
+  <button class="active" onclick="showView('adapted')">Qoder CN 适配效果</button>
+  <button onclick="showView('original')">DSH 原始效果</button>
+  <button onclick="showView('comparison')">对比视图</button>
+</div>
+
+<div id="app"></div>
+
+<script>
+const NAV_ICONS = {
+  chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+  sites: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`,
+  knowledge: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>`,
+  multiagent: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+};
+
+function renderNavBar(activeId) {
+  const items = [
+    { id: 'chat', icon: NAV_ICONS.chat, label: 'Chat' },
+    { id: 'sites', icon: NAV_ICONS.sites, label: 'Sites' },
+    { id: 'knowledge', icon: NAV_ICONS.knowledge, label: 'Knowledge' },
+    { id: 'multiagent', icon: NAV_ICONS.multiagent, label: 'Multi-Agent', badge: true },
+  ];
+  return `<div class="nav-bar">
+    ${items.map(i => `
+      <div class="nav-icon ${i.id === activeId ? 'active' : ''}" title="${i.label}">
+        ${i.icon}
+        ${i.badge ? '<div class="badge"></div>' : ''}
+      </div>
+    `).join('')}
+    <div class="nav-spacer"></div>
+    <div class="nav-icon" title="Settings">${NAV_ICONS.settings}</div>
+  </div>`;
+}
+
+function renderSecondarySidebar() {
+  return `<div class="secondary-sidebar">
+    <div class="sidebar-header">Multi-Agent</div>
+    <div class="sidebar-section">
+      <h4>Overview</h4>
+      <div class="sidebar-item active">
+        <div class="dot" style="background:#22c55e"></div>
+        Bridge Console
+        <span class="count">Live</span>
+      </div>
+      <div class="sidebar-item">
+        <div class="dot" style="background:#3b82f6"></div>
+        Workflows
+        <span class="count">2</span>
+      </div>
+      <div class="sidebar-item">
+        <div class="dot" style="background:#eab308"></div>
+        Pending Tasks
+        <span class="count">3</span>
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <h4>Workers</h4>
+      <div class="sidebar-item">
+        <div class="dot" style="background:#22c55e"></div>
+        claude
+      </div>
+      <div class="sidebar-item">
+        <div class="dot" style="background:#22c55e"></div>
+        codex
+      </div>
+      <div class="sidebar-item">
+        <div class="dot" style="background:#64748b"></div>
+        qwen
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderWorkflowContent() {
+  return `
+    <!-- Workflow 1: SDD -->
+    <div class="wf-card">
+      <div class="wf-head">
+        <div class="dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;flex-shrink:0"></div>
+        <span class="wf-title">SDD: Feature Auth Module</span>
+        <span class="wf-badge collab">合作式</span>
+        <span class="wf-badge progress">5/8</span>
+        <span class="wf-badge dag on">DAG</span>
+        <span class="wf-badge archive">Archive</span>
+      </div>
+      <div class="wf-seg">
+        <i class="run" style="width:25%"></i>
+        <i class="ok" style="width:50%"></i>
+        <i class="pend" style="width:12.5%"></i>
+        <i class="blk" style="width:12.5%"></i>
+      </div>
+      <div class="wf-leg">
+        <span><em style="background:#3b82f6"></em>Running 2</span>
+        <span><em style="background:#22c55e"></em>Done 4</span>
+        <span><em style="background:#eab308"></em>Pending 1</span>
+        <span><em style="background:#f59e0b"></em>Blocked 1</span>
+      </div>
+      <div class="lanes">
+        <div class="lane">
+          <div class="lane-head">
+            <div class="dot" style="width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 4px #22c55e"></div>
+            <b>claude</b>
+            <span class="role">Planner / Implementer</span>
+          </div>
+          <div class="lane-task"><span class="st st-completed"></span><span class="tid">t1</span><span class="tt">Write implementation plan</span></div>
+          <div class="lane-task"><span class="st st-completed"></span><span class="tid">t2</span><span class="tt">Implement auth middleware</span></div>
+          <div class="lane-task"><span class="st st-running"></span><span class="tid">t5</span><span class="tt">Add JWT token validation</span></div>
+        </div>
+        <div class="lane">
+          <div class="lane-head">
+            <div class="dot" style="width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 4px #22c55e"></div>
+            <b>codex</b>
+            <span class="role">Implementer / Tester</span>
+          </div>
+          <div class="lane-task"><span class="st st-completed"></span><span class="tid">t3</span><span class="tt">Write unit tests for login</span></div>
+          <div class="lane-task"><span class="st st-completed"></span><span class="tid">t4</span><span class="tt">Write integration tests</span></div>
+          <div class="lane-task"><span class="st st-running"></span><span class="tid">t6</span><span class="tt">Implement refresh token flow</span></div>
+        </div>
+        <div class="lane">
+          <div class="lane-head">
+            <div class="dot" style="width:6px;height:6px;border-radius:50%;background:#64748b"></div>
+            <b>qwen</b>
+            <span class="role">Reviewer</span>
+          </div>
+          <div class="lane-task"><span class="st st-pending"></span><span class="tid">t7</span><span class="tt">Code review auth module</span><span class="wait">wait t5, t6</span></div>
+          <div class="lane-task"><span class="st st-failed"></span><span class="tid">t8</span><span class="tt">Security audit</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workflow 2: Research -->
+    <div class="wf-card">
+      <div class="wf-head">
+        <div class="dot" style="width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0"></div>
+        <span class="wf-title">Research: API Design Patterns</span>
+        <span class="wf-badge compete">竞争式</span>
+        <span class="wf-badge progress">2/3</span>
+        <span class="wf-badge dag">DAG</span>
+      </div>
+      <div class="wf-seg">
+        <i class="ok" style="width:66.7%"></i>
+        <i class="pend" style="width:33.3%"></i>
+      </div>
+      <div class="wf-leg">
+        <span><em style="background:#22c55e"></em>Done 2</span>
+        <span><em style="background:#eab308"></em>Pending 1</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderMembersContent() {
+  return `<div class="members-grid">
+    <div class="mem-card">
+      <div class="nm"><div class="dot" style="width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 4px #22c55e"></div>claude</div>
+      <div class="role">Planner / Implementer</div>
+      <div class="act">Running - JWT token validation</div>
+      <div class="row"><span>Done</span><b>3/4</b></div>
+      <div class="row"><span>Failed</span><b>0</b></div>
+      <div class="prog"><i style="width:75%"></i></div>
+    </div>
+    <div class="mem-card">
+      <div class="nm"><div class="dot" style="width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 4px #22c55e"></div>codex</div>
+      <div class="role">Implementer / Tester</div>
+      <div class="act">Running - Refresh token flow</div>
+      <div class="row"><span>Done</span><b>2/3</b></div>
+      <div class="row"><span>Failed</span><b>0</b></div>
+      <div class="prog"><i style="width:66%"></i></div>
+    </div>
+    <div class="mem-card">
+      <div class="nm"><div class="dot" style="width:6px;height:6px;border-radius:50%;background:#64748b"></div>qwen</div>
+      <div class="role">Reviewer</div>
+      <div class="act">Idle - Waiting for dependencies</div>
+      <div class="row"><span>Done</span><b>0/2</b></div>
+      <div class="row"><span>Failed</span><b style="color:#ef4444">1</b></div>
+      <div class="prog"><i style="width:0%"></i></div>
+    </div>
+    <div class="mem-card">
+      <div class="nm"><div class="dot" style="width:6px;height:6px;border-radius:50%;background:#64748b"></div>dsh</div>
+      <div class="role">Coordinator</div>
+      <div class="act">Idle</div>
+      <div class="row"><span>Done</span><b>0/0</b></div>
+      <div class="row"><span>Failed</span><b>0</b></div>
+      <div class="prog"><i style="width:0%"></i></div>
+    </div>
+  </div>`;
+}
+
+function renderDispatchContent() {
+  return `<div class="dispatch-form">
+    <label>Worker
+      <select><option>claude</option><option>codex</option><option>qwen</option><option>dsh</option></select>
+    </label>
+    <label>Prompt
+      <textarea placeholder="Enter the task to dispatch..."></textarea>
+    </label>
+    <button class="dispatch-btn">Dispatch Task</button>
+  </div>`;
+}
+
+function renderTasksContent() {
+  const tasks = [
+    { id: 'task-001', title: 'JWT token validation', status: 'running', worker: 'claude', color: '#3b82f6' },
+    { id: 'task-002', title: 'Refresh token flow', status: 'running', worker: 'codex', color: '#3b82f6' },
+    { id: 'task-003', title: 'Code review auth module', status: 'pending', worker: 'qwen', color: '#eab308' },
+    { id: 'task-004', title: 'Security audit', status: 'failed', worker: 'qwen', color: '#ef4444' },
+    { id: 'task-005', title: 'Write implementation plan', status: 'completed', worker: 'claude', color: '#22c55e' },
+    { id: 'task-006', title: 'Implement auth middleware', status: 'completed', worker: 'claude', color: '#22c55e' },
+    { id: 'task-007', title: 'Write unit tests for login', status: 'completed', worker: 'codex', color: '#22c55e' },
+    { id: 'task-008', title: 'Write integration tests', status: 'completed', worker: 'codex', color: '#22c55e' },
+  ];
+  return tasks.map(t => `
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #2a2d3a;border-radius:8px;background:#1e2030;margin-bottom:6px;font-size:12px">
+      <div style="width:3px;align-self:stretch;border-radius:2px;background:${t.color};flex-shrink:0"></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.title}</div>
+        <div style="font-size:10px;color:#64748b">${t.id}</div>
+      </div>
+      <span style="font-size:10px;font-weight:600;color:${t.color};white-space:nowrap">${t.worker} - ${t.status}</span>
+    </div>
+  `).join('');
+}
+
+function renderAdaptedView() {
+  return `<div class="main-layout">
+    ${renderNavBar('multiagent')}
+    ${renderSecondarySidebar()}
+    <div class="workbench">
+      <div class="workbench-header">
+        <h2><span class="status-dot on"></span>Multi-Agent Bridge</h2>
+        <span class="controller">controller: main-session</span>
+      </div>
+      <div class="stats-bar">
+        <span class="stat-chip run"><b>2</b>Running</span>
+        <span class="stat-chip pend"><b>1</b>Pending</span>
+        <span class="stat-chip ok"><b>5</b>Done</span>
+        <span class="stat-chip err"><b>1</b>Failed</span>
+      </div>
+      <div class="tab-bar" id="tab-bar-adapted">
+        <button class="tab active" data-tab="workflows">Workflows</button>
+        <button class="tab" data-tab="tasks">Tasks</button>
+        <button class="tab" data-tab="members">Members</button>
+        <button class="tab" data-tab="dispatch">Dispatch</button>
+      </div>
+      <div class="tab-content" id="tab-content-adapted">
+        ${renderWorkflowContent()}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderOriginalView() {
+  return `<div class="main-layout" style="background:#0f172a">
+    <div style="flex:1;display:flex;flex-direction:column;max-width:480px;margin:0 auto;height:100%">
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #334155">
+        <h1 style="font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;margin:0">
+          <span style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e"></span>
+          Multi-Agent
+        </h1>
+        <span style="margin-left:auto;font-size:11px;color:#94a3b8;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:2px 9px">main-session</span>
+      </div>
+      <div style="display:flex;gap:6px;padding:8px 14px;border-bottom:1px solid #334155;flex-wrap:wrap">
+        <span class="stat-chip run"><b>2</b>Running</span>
+        <span class="stat-chip pend"><b>1</b>Pending</span>
+        <span class="stat-chip ok"><b>5</b>Done</span>
+        <span class="stat-chip err"><b>1</b>Failed</span>
+      </div>
+      <div style="display:flex;gap:2px;padding:6px 8px 0;border-bottom:1px solid #334155" id="tab-bar-original">
+        <button class="tab active" data-tab="workflows">Workflows</button>
+        <button class="tab" data-tab="tasks">Tasks</button>
+        <button class="tab" data-tab="members">Members</button>
+        <button class="tab" data-tab="dispatch">Dispatch</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:12px" id="tab-content-original">
+        ${renderWorkflowContent()}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderComparisonView() {
+  return `<div class="comparison">
+    <div class="side">
+      <div class="side-label">DSH Desktop (Original) - Right Sidebar Tab</div>
+      ${renderOriginalView()}
+    </div>
+    <div class="side">
+      <div class="side-label">Qoder CN (Adapted) - Left Nav + Workbench View</div>
+      ${renderAdaptedView()}
+    </div>
+  </div>`;
+}
+
+let currentView = 'adapted';
+const tabContents = {
+  workflows: renderWorkflowContent,
+  tasks: renderTasksContent,
+  members: renderMembersContent,
+  dispatch: renderDispatchContent,
+};
+
+function showView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-toggle button').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.view-toggle button[onclick="showView('${view}')"]`).classList.add('active');
+  render();
+}
+
+function switchTab(tabId, prefix) {
+  const bar = document.getElementById(`tab-bar-${prefix}`);
+  if (!bar) return;
+  bar.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+  const content = document.getElementById(`tab-content-${prefix}`);
+  if (content && tabContents[tabId]) {
+    content.innerHTML = tabContents[tabId]();
+  }
+}
+
+function render() {
+  const app = document.getElementById('app');
+  if (currentView === 'adapted') {
+    app.innerHTML = renderAdaptedView();
+    setupTabs('adapted');
+  } else if (currentView === 'original') {
+    app.innerHTML = renderOriginalView();
+    setupTabs('original');
+  } else {
+    app.innerHTML = renderComparisonView();
+    setupTabs('adapted');
+    setupTabs('original');
+  }
+  // Resize
+  app.style.height = 'calc(100vh - 32px)';
+}
+
+function setupTabs(prefix) {
+  const bar = document.getElementById(`tab-bar-${prefix}`);
+  if (!bar) return;
+  bar.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => switchTab(tab.dataset.tab, prefix));
+  });
+}
+
+render();
+</script>
+</body>
+</html>

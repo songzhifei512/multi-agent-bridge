@@ -7,7 +7,7 @@
 // - Security: No hardcoded auth token, env-only
 // - Task tracking: tasks object in memory.json, task_list tool
 //
-// Tools (32 total):
+// Tools (34 total):
 //   shared_memory_set/get/list   — KV context store
 //   shared_notes_append/read     — append-only handoff notes
 //   task_create/list             — task queue management (deliverable + acceptance_criteria)
@@ -24,7 +24,7 @@
 //   project_search               — ripgrep (fallback grep)
 //   read_file                    — file content with line numbers
 //   list_dir                     — directory listing
-//   run_codex/run_claude/run_qwen — async call a CLI agent (thin wrappers over the Agent Registry)
+//   run_codex/run_claude/run_qwen/run_qoder — async call a CLI agent (thin wrappers over the Agent Registry)
 //   agent_list                   — list registered agents with capability tags
 //   agent_invoke                 — invoke any registered agent by name
 //   memory_search                — semantic vector search over shared memories (3.7.0, 路线B)
@@ -198,6 +198,10 @@ const tools = [
     inputSchema: { type: "object", properties: { prompt: { type: "string" }, workdir: { type: "string" }, model: { type: "string" }, timeout_sec: { type: "number" }, task_id: { type: "string" }, session_id: { type: "string" }, max_retries: { type: "number" }, retry_base_ms: { type: "number" }, retry_max_ms: { type: "number" }, capture_trace: { type: "boolean", description: " 捕获完整推理 step 流存 task.trace，默认 false" }, plan_mode: { type: "boolean", description: " Plan 模式:只读调研,强制关 auto,产出方案不落盘" }, fork_on_fail: { type: "string", description: " A 失败自动 fork：真失败时父 superseded + 生成备选子任务给此 agent 承接（仅工作流任务，≤3 上限）。不传不自动 fork。" } }, required: ["prompt"] } },
   { name: "run_qwen", description: "Async call Qwen CLI (qwen --auth-type openai, Qwen Code) to run a task. For writing/iterating docs & PPT (complements opencode) and image analysis (complements vision_analyze). Uses the qwen 端点 OpenAI-compatible endpoint via QWEN_ENV. --approval-mode auto-edit lets write_file land to disk (auto). Non-blocking. Auto-tracks task. Pass session_id to resume a prior Qwen session (preserves context — qwen has real resume via --resume, unlike opencode); the new session id is captured from JSON output and returned for later resumption. Retries automatically on 429/rate-limit/timeout with exponential backoff (default 2 retries, 3 total attempts); set max_retries=0 to disable.",
     inputSchema: { type: "object", properties: { prompt: { type: "string" }, workdir: { type: "string" }, model: { type: "string" }, auto: { type: "boolean", description: "qwen honors auto via --approval-mode auto-edit (write_file lands to disk). Default true." }, timeout_sec: { type: "number" }, task_id: { type: "string" }, session_id: { type: "string" }, max_retries: { type: "number" }, retry_base_ms: { type: "number" }, retry_max_ms: { type: "number" }, capture_trace: { type: "boolean", description: " 捕获完整推理 step 流存 task.trace，默认 false" }, plan_mode: { type: "boolean", description: " Plan 模式:只读调研,强制关 auto,产出方案不落盘" }, fork_on_fail: { type: "string", description: " A 失败自动 fork：真失败时父 superseded + 生成备选子任务给此 agent 承接（仅工作流任务，≤3 上限）。不传不自动 fork。" } }, required: ["prompt"] } },
+  { name: "run_qoder", description: "Async call Qoder CLI (qodercli -p -o json) to run a task. Alibaba Qwen ecosystem full-stack coding agent — for Chinese-optimized software engineering, code review (/review), and /goal long-task mode. Independent rate-limit pool from ByteDance/Anthropic. Real resume via -r (--resume), auto via --permission-mode auto, JSON output. Non-blocking. Auto-tracks task. Pass session_id to resume a prior Qoder session. Retries automatically on 429/rate-limit/timeout with exponential backoff (default 2 retries).",
+    inputSchema: { type: "object", properties: { prompt: { type: "string" }, workdir: { type: "string" }, model: { type: "string" }, auto: { type: "boolean", description: "qoder honors auto via --permission-mode auto (write_file lands to disk). Default true." }, timeout_sec: { type: "number" }, task_id: { type: "string" }, session_id: { type: "string" }, max_retries: { type: "number" }, retry_base_ms: { type: "number" }, retry_max_ms: { type: "number" }, capture_trace: { type: "boolean", description: "捕获完整推理 step 流存 task.trace，默认 false" }, plan_mode: { type: "boolean", description: "Plan 模式:只读调研,强制关 auto,产出方案不落盘" }, fork_on_fail: { type: "string", description: "失败自动 fork：真失败时父 superseded + 备选子任务给此 agent 承接（仅工作流任务，≤3 上限）。不传不自动 fork。" } }, required: ["prompt"] } },
+  { name: "run_qoder_cn", description: "Async call Qoder CN CLI (qoderclicn -p -o json) to run a task. Qoder 国内版（原通义灵码），阿里云通义大模型国内部署 — 合规数据不出境、国内低延迟、中文原生优化。独立于国际版 Qoder 的账号/模型/限流池，国内网络环境下访问更稳定。Real resume via -r, auto via --permission-mode accept_edits + --no-session-persistence, JSON output. Non-blocking. Auto-tracks task. Retries automatically on 429 with exponential backoff.",
+    inputSchema: { type: "object", properties: { prompt: { type: "string" }, workdir: { type: "string" }, model: { type: "string" }, auto: { type: "boolean", description: "qoder_cn honors auto via --permission-mode accept_edits + --no-session-persistence. Default true." }, timeout_sec: { type: "number" }, task_id: { type: "string" }, session_id: { type: "string" }, max_retries: { type: "number" }, retry_base_ms: { type: "number" }, retry_max_ms: { type: "number" }, capture_trace: { type: "boolean", description: "捕获完整推理 step 流存 task.trace，默认 false" }, plan_mode: { type: "boolean", description: "Plan 模式:只读调研,强制关 auto,产出方案不落盘" }, fork_on_fail: { type: "string", description: "失败自动 fork：真失败时父 superseded + 备选子任务给此 agent 承接（仅工作流任务，≤3 上限）。不传不自动 fork。" } }, required: ["prompt"] } },
   { name: "agent_list", description: "List all registered agents (run_* workers) available to agent_invoke. One agent per line: name + (auto: yes) if it honors the auto param (only codex) + [capabilities] + strengths. Use it to pick the right worker for a task. 不自动派单——只备齐选型数据。",
     inputSchema: { type: "object", properties: {} } },
   { name: "agent_eval", description: "Agent 能力评估体系：按 agent 聚合任务记录出 完成率/平均质量分/平均时长/平均重试/满意度 (五等)。只读,供任务路由与选型建议。",
@@ -1516,6 +1520,8 @@ async function handleAsync(name, args) {
   if (name === "run_claude") return runAgent("claude", args);
   if (name === "run_qwen") return runAgent("qwen", args);
   if (name === "run_dsh") return runAgent("dsh", args);
+  if (name === "run_qoder") return runAgent("qoder", args);
+  if (name === "run_qoder_cn") return runAgent("qoder_cn", args);
 
   //  task_resume：恢复 interrupted/failed/superseded 任务 —— 复用原任务描述 + session_id + workdir，
   //   重新派发给原 worker 续跑（复用原 task_id → runAgent 保留 workflow/dependencies/审点挂链）。

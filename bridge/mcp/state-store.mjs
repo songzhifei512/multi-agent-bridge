@@ -196,7 +196,11 @@ export function sweepStaleRunning(m) {
     if (!last) continue; // 无心跳无创建时间，跳过（不靠猜）
     // 长任务放宽：heartbeat_interval_ms（worker 主动设的心跳周期）→ stale 阈值按 20× 间隔放大，
     // 防"纯只读/慢评估任务 10min 无里程碑被打点"被误杀（2026-08-31 修复长任务误判）。
-    const staleMs = (t.heartbeat_interval_ms > 0) ? Math.max(globalStale, t.heartbeat_interval_ms * 20) : globalStale;
+    const staleMs = (t.heartbeat_interval_ms > 0)
+      ? Math.max(globalStale, t.heartbeat_interval_ms * 20)
+      : (t.timeout_sec > 0 && t.timeout_sec * 1000 < globalStale)
+        ? Math.max(90000, t.timeout_sec * 1000)  // 短任务：用 timeout_sec 作停滞阈值（下限 90s），比全局 10min 更快暴露卡死
+        : globalStale;
     if (now - last > staleMs) {
       t.status = "failed";
       t.completed_at = new Date().toISOString();
