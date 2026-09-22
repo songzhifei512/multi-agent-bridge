@@ -23,7 +23,7 @@ import { createServer } from 'node:http';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { updateMem, KV_FILE, NOTES_FILE } from './state-store.mjs';
+import { updateMem, KV_FILE, NOTES_FILE, sweepStaleRunning } from './state-store.mjs';
 import { AGENTS } from './agents-registry.mjs';
 
 /* ── 开发期自重启：本目录 .mjs 源码变化 → 退出，由宿主插件（dsh-panel host）自动拉起新版。
@@ -2326,3 +2326,32 @@ setInterval(() => {
   const hb = `: ping ${Date.now()}\n\n`;
   for (const cl of sseClients) { try { cl.write(hb); } catch { sseClients.delete(cl); } }
 }, 25000);
+
+/* 孤儿任务回收器（v1.0.1+）：每 BRIDGE_SWEEP_MS（默认 60s）调一次 sweepStaleRunning，
+   不再依赖 task_list handler 才被动触发。覆盖两种孤儿：
+     1) pid 已死的 running 任务（worker 父进程 OOM/SIGKILL 后 child.exit 未触发）—— 立即 failed
+     2) 心跳停滞超过阈值（默认 10 分钟）的卡死任务 —— 兜底失败
+   unref 避免阻塞进程退出。启动时也跑一次，捕获本次重启前留下的孤儿。
+   env: BRIDGE_SWEEP_MS 可调间隔（毫秒），用于实测/紧急清理；BRIDGE_SWEEP_DISABLE=1 关停。 */
+if (process.env.BRIDGE_SWEEP_DISABLE !== "1") {
+  const sweepIntervalMs = Math.max(1000, parseInt(process.env.BRIDGE_SWEEP_MS, 10) || 60000);
+  const sweepOnce = () => {
+    try {
+      // updateMem 的 mutator 返回 swept[] 数组（sweepStaleRunning 的返回值），所以这里
+      // 直接拿到被清理的 task_id 列表。updateMem 内部走同一把 lock，sweepStaleRunning
+      // 直接 mutate mem → 写回原子 rename，整个 RMW 在一把锁内完成。
+      const swept = updateMem((mem) => sweepStaleRunning(mem)) || [];
+      if (swept && swept.length) {
+        console.log(`[bridge-web-panel] sweep cleaned ${swept.length} orphan task(s): ${swept.join(", ")}`);
+        broadcast();
+      }
+    } catch (e) {
+      console.warn('[bridge-web-panel] sweep failed:', e.message);
+    }
+  };
+  // 立即扫一次（捕获重启前留下的孤儿；startup 后 fs.watch 还没收到第一笔事件前就要可见）
+  setImmediate(sweepOnce);
+  const sweepTimer = setInterval(sweepOnce, sweepIntervalMs);
+  if (sweepTimer.unref) sweepTimer.unref();
+  console.log(`[bridge-web-panel] orphan sweep timer started (interval=${sweepIntervalMs}ms)`);
+}
