@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": false,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "paths": {
+      "bridge-ui": ["../bridge-ui/src"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "../bridge-ui/src/**/*.ts", "../bridge-ui/src/**/*.tsx"]
+}
