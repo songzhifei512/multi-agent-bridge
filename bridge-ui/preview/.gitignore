@@ -1,0 +1,14 @@
+# bridge-ui/preview/ — 本地预览调试产物，全部屏蔽不入仓
+#
+# 包含：
+#   - mockState.ts / main.tsx / preview.html    预览入口（mock 数据）
+#   - theme-showcase.html / web-panel-prototype.html    原型 HTML
+#   - screenshots/*.png                          回归截图（本地对比用）
+#   - screenshots/*.html                         单页 HTML 原型
+#
+# Why: 这些是开发期产物，跟发布版本无关。误 git add 会污染仓库（408KB+ PNG、html prototype）。
+#
+# How to apply: 该目录下的任何文件都不入库。需要发布预览 HTML 时单独复制到 docs/ 下。
+
+*
+!.gitignore
