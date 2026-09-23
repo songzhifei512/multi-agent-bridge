@@ -18,11 +18,18 @@ cd dsh-panel
 npm install
 npm run build
 
-# 2. 在 DSH 配置中启用插件
-# 编辑 ~/.dsh/config.yaml，添加：
-plugins:
-  - path: E:\AI\WorkRoot\Harness\multi-agent\dsh-panel
+# 2. 注册到 DSH 插件目录（开发模式：junction 链接，代码改动即时生效）
+npm run link-dev
+
+# 也可手动指定路径：
+#   DSH_PLUGINS_DIR=/custom/path npm run link-dev
+# 或直接创建链接：
+#   Windows（管理员 PowerShell）
+#   New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.dsh\plugins\dsh-bridge-panel" \
+#     -Target "<仓库路径>\multi-agent\dsh-panel"
 ```
+
+> 升级版本号时，跑 `npm run build` 后重启 DSH Desktop 即可加载新 dist；不需重跑 `link-dev`（junction 始终指向同一源）。
 
 ### 开发
 

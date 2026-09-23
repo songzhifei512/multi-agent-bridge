@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "dev": "node build.mjs --watch"
+    "dev": "node build.mjs --watch",
+    "link-dev": "node link-dev.mjs"
   },
   "dsh": {
     "bundle": {
