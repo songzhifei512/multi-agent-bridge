@@ -35,7 +35,7 @@
 //   bridge_checkpoint            — save/list/restore named state snapshots for audit/rollback
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, renameSync, rmSync, openSync, closeSync, copyFileSync } from "node:fs";
-import { join, resolve, extname, sep } from "node:path";
+import { join, resolve, extname, sep, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { AGENTS, extractJsonObject, parseClaudeOut, probeAgents } from "./agents-registry.mjs";
@@ -184,6 +184,18 @@ const tools = [
     inputSchema: { type: "object", properties: { file_path: { type: "string" } }, required: ["file_path"] } },
   { name: "file_lock_list", description: "List all currently held (non-expired) file locks. For diagnostics.",
     inputSchema: { type: "object", properties: {} } },
+  // 2026-09-23 fix：worker_* 工具给被 agent_invoke/run_* spawn 的 worker session 用，
+  //   路径边界 = 主控传入的 args.workdir（主控已授权），不受 BRIDGE_WORK_ROOT 限制。
+  //   让 worker 能读主仓库文件，弥补 run-driver 把 worker cwd 锁在 sandbox 的隔离过度。
+  //   仍受路径遍历保护（拒绝含 ../ 或绝对路径越权）。
+  { name: "worker_read_file", description: "Read a file the worker is authorized to access (bounded by its workdir, NOT BRIDGE_WORK_ROOT). For spawned worker sessions only. Worker passes file_path relative to its workdir, or absolute within workdir parent tree.",
+    inputSchema: { type: "object", properties: { file_path: { type: "string", description: "相对 worker workdir 的路径，或 workdir 父树内的绝对路径" }, workdir: { type: "string", description: "worker 的授权 workdir（主控传入 args.workdir）" }, offset: { type: "number" }, limit: { type: "number" } }, required: ["file_path", "workdir"] } },
+  { name: "worker_list_dir", description: "List directory entries (one level) within worker's authorized workdir parent tree.",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, workdir: { type: "string" } }, required: ["workdir"] } },
+  { name: "worker_glob", description: "Glob files within worker's authorized workdir parent tree.",
+    inputSchema: { type: "object", properties: { pattern: { type: "string" }, workdir: { type: "string" } }, required: ["workdir", "pattern"] } },
+  { name: "worker_grep", description: "Search file contents (ripgrep) within worker's authorized workdir parent tree. Returns file:line:match.",
+    inputSchema: { type: "object", properties: { pattern: { type: "string" }, workdir: { type: "string" }, glob: { type: "string" }, max: { type: "number" } }, required: ["workdir", "pattern"] } },
   { name: "project_search", description: "Search project with ripgrep (fallback grep). Returns file:line:match.",
     inputSchema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" }, max: { type: "number" } }, required: ["pattern"] } },
   { name: "read_file", description: "Read file content with line numbers. For letting the other agent inspect a file. Path is confined to BRIDGE_WORK_ROOT (or the caller's workdir) per  path isolation — out-of-root paths are rejected.",
@@ -346,6 +358,13 @@ function handleSync(name, args) {
       let _swept = [];
       updateMem((m) => { if (m.tasks) _swept = sweepStaleRunning(m); });
       if (_swept.length) console.error(`[sweep] auto-failed ${_swept.length} stale task(s): ${_swept.join(", ")}`);
+      // 2026-09-23 fix：task_list 顺便触发"dep 满足即派发"全 workflow sweep —
+      //   bridge 重启 / 视角 stage 刚完成 / 任何工具调用后，pending 收敛 task 都可能 dep 已
+      //   满足但没人 trigger。把 dispatch 挂到 task_list 上保证 task_list 一定可见即可触发。
+      try {
+        const allWfIds = Object.keys(loadMem().workflows || {});
+        for (const wfId2 of allWfIds) autoDispatchWorkflowStages(wfId2);
+      } catch {}
       const m = loadMem();
       if (!m.tasks) return { content: [{ type: "text", text: "(no tasks)" }] };
       const tasks = Object.entries(m.tasks).map(([id, t]) => ({
@@ -384,6 +403,7 @@ function handleSync(name, args) {
         runtime_ms: (t.status === "running" && t.agent_live && t.agent_live.started_at) ? (Date.now() - t.agent_live.started_at) : null,   //  长任务已运行时长
         interruptible: t.status === "running" && !!(t.agent_live && t.agent_live.pid),   //  可中断：running 且有子进程 PID
         resumable: ["interrupted", "failed", "superseded"].includes(t.status),          //  可恢复：中断/失败/替代态
+        workflow: t.workflow || null,   // 2026-09-23 fix：必须返回 workflow 字段，面板「工作流卡」才能按 workflow.id 分组渲染（之前丢字段导致 DSH 派发后子任务不出现在工作流卡里）
         progress_log: Array.isArray(t.progress_log) ? t.progress_log.slice(-10) : [],  // 里程碑（末10条）
         escalation: t.escalation ? { status: t.status, question: t.escalation.question, options: t.escalation.options, raised_at: t.escalation.raised_at, raised_by: t.escalation.raised_by, decided_at: t.escalation.decided_at, decision: t.escalation.decision, decider: t.escalation.decider } : null   //  决策上浮
       }));
@@ -540,6 +560,16 @@ function handleSync(name, args) {
         t.result = args.result || "";
         result = { ok: true };
       });
+      // 2026-09-23 fix：task 完成时触发跨 workflow 的"dep 满足即派发"扫一遍——
+      //   收敛/中段 task 因为 dep 未满足留到 caller，task_complete 后 deps 可能刚满足，
+      //   但没人 trigger 它们。让 bridge 自动扫所有 workflow 的 pending task 派发可执行的。
+      //   必须在 updateMem 回调外：loadMem() 读的是磁盘最新值，回调内 m 还没 saveMem 落盘。
+      if (result.ok) {
+        try {
+          const allWfIds = Object.keys(loadMem().workflows || {});
+          for (const wfId2 of allWfIds) autoDispatchWorkflowStages(wfId2);
+        } catch (e) { /* fire-and-forget；dispatch 失败不影响 complete 返回 */ }
+      }
       if (result.ok) return { content: [{ type: "text", text: `completed task ${args.task_id}` }] };
       return { content: [{ type: "text", text: `error: ${result.error}` }], isError: true };
     }
@@ -1016,6 +1046,83 @@ function handleSync(name, args) {
         return { content: [{ type: "text", text: `error: ${e.message}` }], isError: true };
       }
     }
+    // 2026-09-23 fix：worker_* 工具给被 spawn 的 worker session 用，
+    //   路径边界 = 主控传入的 args.workdir 父树（不强制 BRIDGE_WORK_ROOT）。
+    //   主控已用 agent_invoke({workdir:"..."}) 显式授权，worker 不再被 sandbox 锁住。
+    case "worker_read_file": {
+      try {
+        const abs = resolveWorkerAuthorizedPath(args.workdir, args.file_path);
+        if (!existsSync(abs)) return { content: [{ type: "text", text: `error: file not found: ${abs}` }], isError: true };
+        const lines = readFileSync(abs, "utf8").split("\n");
+        const start = Math.max(1, args.offset || 1);
+        const limit = args.limit || 2000;
+        const end = Math.min(lines.length, start + limit - 1);
+        const out = [];
+        for (let i = start - 1; i < end; i++) out.push(`${i + 1}\t${lines[i] ?? ""}`);
+        return { content: [{ type: "text", text: out.join("\n") }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `error: ${e.message}` }], isError: true };
+      }
+    }
+    case "worker_list_dir": {
+      try {
+        const dir = resolveWorkerAuthorizedPath(args.workdir, args.path || ".");
+        const entries = readdirSync(dir, { withFileTypes: true }).map((e) => ({ name: e.name, type: e.isDirectory() ? "dir" : "file" }));
+        return { content: [{ type: "text", text: JSON.stringify(entries, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `error: ${e.message}` }], isError: true };
+      }
+    }
+    case "worker_glob": {
+      try {
+        const root = resolveWorkerAuthorizedPath(args.workdir, ".");
+        // 自实现：基于 glob pattern 正则扫 root（轻量、零依赖）
+        const re = globToRegex(args.pattern);
+        const out = [];
+        const walk = (dir, prefix) => {
+          for (const e of readdirSync(dir, { withFileTypes: true })) {
+            const full = join(dir, e.name);
+            const rel = prefix ? `${prefix}/${e.name}` : e.name;
+            if (e.isDirectory()) walk(full, rel);
+            else if (re.test(rel)) out.push(full);
+          }
+        };
+        walk(root, "");
+        return { content: [{ type: "text", text: out.join("\n") || "(no matches)" }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `error: ${e.message}` }], isError: true };
+      }
+    }
+    case "worker_grep": {
+      try {
+        const root = resolveWorkerAuthorizedPath(args.workdir, ".");
+        const max = args.max ?? 50;
+        const out = [];
+        let count = 0;
+        const walk = (dir) => {
+          for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (count >= max) return;
+            const full = join(dir, e.name);
+            if (e.isDirectory()) walk(full);
+            else if (e.isFile()) {
+              try {
+                const text = readFileSync(full, "utf8");
+                const re = new RegExp(args.pattern);
+                const lines = text.split("\n");
+                for (let i = 0; i < lines.length; i++) {
+                  if (count >= max) break;
+                  if (re.test(lines[i])) { out.push(`${full}:${i + 1}:${lines[i]}`); count++; }
+                }
+              } catch {}
+            }
+          }
+        };
+        walk(root);
+        return { content: [{ type: "text", text: out.join("\n") || "(no matches)" }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `error: ${e.message}` }], isError: true };
+      }
+    }
     case "agent_list": {
       // List every registered agent available to agent_invoke. 起带能力标签：
       // name + auto + capabilities + strengths，让调用方（或未来 Orchestrator）有选型依据。
@@ -1330,11 +1437,65 @@ function busyWorkerSet() {
   try {
     const m = loadMem();
     for (const t of Object.values(m.tasks || {})) {
-      const a = t?.agent_live?.state === "busy" ? t.assigned_to : (t?.status === "running" ? t.assigned_to : null);
-      if (a) busy.add(String(a).toLowerCase());
+      // 2026-09-23 fix：只看 status==='running' 的 task；agent_live.state 仅作 info。
+      //   之前只看 agent_live.state，导致已完成/failed 的 task 残留 busy=true 让 worker 永久卡死。
+      if (t?.status === "running" && t?.assigned_to) {
+        busy.add(String(t.assigned_to).toLowerCase());
+      }
     }
   } catch {}
   return busy;
+}
+// 2026-09-23 fix：单派发 task（agent_invoke / run_* 直派）默认在面板是「孤儿 task」——
+//   task.workflow=null 导致「当前工作流」视图看不到它，等于工作流卡空空而 task 全跑了。
+//   修法：单派发入口（agent_invoke / run_*/run_dsh 直调路径）自动给 task 造一张「ad-hoc workflow」
+//   卡挂上，让面板按工作流卡聚合显示。caller 可显式传 args.workflow_id / args.workflow_title /
+//   args.workflow_tpl 复用同名工作流卡（多次单派归并），缺省则按 (agent + 日期) 派生稳定 id。
+//
+//   返回 { workflow, workflow_meta }：
+//   - workflow     : 要写进 m.workflows[wfId] 的 meta 卡对象（调用方再 updateMem 落库）
+//   - workflow_meta: 直接挂到 task.workflow 的精简 meta（id/tpl/step/seq/sub）
+function ensureAdHocWorkflow(args, agentName) {
+  const wfId = args.workflow_id || `adhoc-${agentName}-${new Date().toISOString().slice(0, 10)}`;
+  const title = args.workflow_title || args.title || (String(args.prompt || "").slice(0, 40) + (args.prompt && args.prompt.length > 40 ? "..." : ""));
+  const tpl = args.workflow_tpl || "adhoc";
+  const nowIso = new Date().toISOString();
+  const workflow = {
+    id: wfId,
+    tpl,
+    paradigm: tpl === "adhoc" ? "adhoc" : tpl,
+    title,
+    agent: agentName,
+    created_at: nowIso,
+    source: "ad-hoc-agent_invoke",  // 面板可识别为单派发自动造的卡
+  };
+  const seqN = (typeof args.workflow_seq === "number") ? args.workflow_seq : 0;
+  const workflow_meta = {
+    id: wfId,
+    tpl,
+    step: args.workflow_step || `单派发(${agentName})`,
+    base: title,
+    quality_threshold: 80,
+    parallel: false,
+    seq: seqN,
+    sub: 0,
+  };
+  return { wfId, workflow, workflow_meta };
+}
+
+// 把 ad-hoc workflow 卡落库（m.workflows[wfId]）并把 workflow_meta 塞到 args.workflow_meta 供 runAgent 用。
+// 调用方在 dispatch 之前调用一次，runAgent 内部会读 args.workflow_meta 挂到 task.workflow。
+function attachAdHocWorkflow(args, agentName) {
+  if (args.workflow_meta && args.workflow_meta.id) return;  // caller 已挂，跳过
+  const { wfId, workflow, workflow_meta } = ensureAdHocWorkflow(args, agentName);
+  updateMem((m) => {
+    // 已存在则只补 created_at，保留原 tpl/title（多次单派归并同名卡）。
+    if (!m.workflows[wfId]) {
+      m.workflows[wfId] = { ...workflow, created_at: m.workflows[wfId]?.created_at || workflow.created_at };
+    }
+  });
+  args.workflow_meta = workflow_meta;
+  return { wfId, workflow_meta };
 }
 // 共享的空闲 worker 选取核心：从注册 worker 池里，排除 exclusions（不含要求名）+ 当前 busy + 轮转指针，
 // 返回下一个空闲 worker；池空返回 null（调用方自定兜底）。
@@ -1353,13 +1514,71 @@ function pickReviewWorker() {
   // 空池回退原默认 qwen（审闸兜底，不因选人失败而卡）
   return pickIdleWorker(ctl ? [ctl] : [], busy) || "qwen";
 }
+// 2026-09-23 fix：worker_* 工具的路径解析——让 worker session 能读主仓库文件，
+//   不再被 BRIDGE_WORK_ROOT 锁死。安全模型：
+//   · worker 必须传 workdir（主控在 agent_invoke 时已显式授权）
+//   · 解析路径必须在 workdir 父树内（不逃逸）
+//   · 拒绝 ../ / 绝对路径越权（必须落在 workdir 父树内）
+function resolveWorkerAuthorizedPath(workdir, filePath) {
+  if (!workdir) throw new Error("workdir required（worker session 必须传授权工作目录）");
+  if (!filePath) throw new Error("file_path required");
+  const wdAbs = resolve(workdir);
+  let target = filePath;
+  if (filePath.startsWith("~")) target = join(homedir(), filePath.slice(1));
+  const abs = resolve(isAbsolute(filePath) ? target : join(wdAbs, target));
+  // 安全检查：abs 必须在 wdAbs 父树内（允许兄弟目录，但不允许逃到祖父以上）
+  const wdParent = dirname(wdAbs);
+  if (!abs.startsWith(wdParent + sep) && abs !== wdAbs) {
+    throw new Error(`path traversal blocked: ${abs} 超出授权 workdir ${wdAbs} 的父树`);
+  }
+  return abs;
+}
+function isAbsolute(p) {
+  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/") || p.startsWith("\\");
+}
+// 简单 glob → 正则（仅支持 * ? ** 不带方括号字符类，足够 read/grep 用）
+function globToRegex(pattern) {
+  let re = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") { re += ".*"; i++; }
+      else re += "[^/]*";
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if (".+^$()|{}[]\\".includes(c)) {
+      re += "\\" + c;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp("^" + re + "$");
+}
+// 2026-09-23 fix：workflow_start 落 DAG 后【自动派发】——
+//   历史行为：落完 task 后 task.workflow / 依赖都建好但 caller 必须再调 agent_invoke
+//   才能让 worker claim/run，导致面板"卡在那不动"被误判为 bug。新行为：
+//   workflow_start 返回前自动扫一遍「当前 workflow 涉及的、有 assigned_to 的、依赖已
+//   满足（无 dep 或 dep 全 completed）的 pending task」，给它们 spawn worker。
+//   收敛/中段 task 因为 dep 未满足留到 caller 用 workflow_evolve 或主控后续触发。
+//
+//   workdir 默认走 workflow.workdir（调用方在 workflow_start({workdir:"..."}) 时可指定），
+//   否则 fallback BRIDGE_WORK_ROOT。
+//   fire-and-forget，return 不阻塞。
+// 2026-09-23：函数已搬到独立模块 ./workflow-dispatch.mjs（解 run-driver ↔ shared-context-server 循环依赖），
+//   这里只是 re-export + 调用入口。
+import { autoDispatchWorkflowStages as _autoDispatchWorkflowStages } from "./workflow-dispatch.mjs";
+const autoDispatchWorkflowStages = _autoDispatchWorkflowStages;
+export { _autoDispatchWorkflowStages as autoDispatchWorkflowStages };
 // agent_invoke 自动备路：命名 worker busy 时从空闲池轮询一个备路（排控制主控=不压 main），
-// 无空闲则回退原名字（尽力发，阻塞优于无声失败）。调用方传 same_worker:true 才必须精确同名。
+// 无空闲则回退到「任何已知工作的 worker」（包括原 requested 自已；调用方传 same_worker:true 才必须精确同名）。
 function pickInvokeWorker(requested) {
   const ctl = currentControllerAgent();
   const busy = busyWorkerSet();
-  const exclusions = [requested]; // 备路不选请求名（它正忙）
-  if (ctl) exclusions.push(ctl);  // 也不选主控（不压 main）
+  const exclusions = ctl ? [ctl] : []; // 也不选主控（不压 main）
+  // 2026-09-23 fix：原实现「exclusions 包含 requested」导致 requested busy 时永远轮不上自己。
+  // 改为：如果 requested 不在 busy 里，优先派回它本身（用户意图最准），否则从空闲池挑。
+  const requestedBusy = busy.has(String(requested).toLowerCase());
+  if (!requestedBusy) return requested;
   return pickIdleWorker(exclusions, busy) || requested;
 }
 
@@ -1516,12 +1735,14 @@ async function handleAsync(name, args) {
 
   // run_* are thin wrappers over the Agent Registry: schemas are unchanged
   // (incl. codex's `auto`), the handler body just delegates to the generic runAgent driver.
-  if (name === "run_codex") return runAgent("codex", args);
-  if (name === "run_claude") return runAgent("claude", args);
-  if (name === "run_qwen") return runAgent("qwen", args);
-  if (name === "run_dsh") return runAgent("dsh", args);
-  if (name === "run_qoder") return runAgent("qoder", args);
-  if (name === "run_qoder_cn") return runAgent("qoder_cn", args);
+  // 2026-09-23 fix：run_* 单派发也挂 ad-hoc workflow 卡，否则 task.workflow=null 不进工作流视图。
+  // 同样的 args.workflow_id / args.workflow_title 可让多次 run_* 归并到一张卡。
+  if (name === "run_codex") { attachAdHocWorkflow(args, "codex"); return runAgent("codex", args); }
+  if (name === "run_claude") { attachAdHocWorkflow(args, "claude"); return runAgent("claude", args); }
+  if (name === "run_qwen") { attachAdHocWorkflow(args, "qwen"); return runAgent("qwen", args); }
+  if (name === "run_dsh") { attachAdHocWorkflow(args, "dsh"); return runAgent("dsh", args); }
+  if (name === "run_qoder") { attachAdHocWorkflow(args, "qoder"); return runAgent("qoder", args); }
+  if (name === "run_qoder_cn") { attachAdHocWorkflow(args, "qoder_cn"); return runAgent("qoder_cn", args); }
 
   //  task_resume：恢复 interrupted/failed/superseded 任务 —— 复用原任务描述 + session_id + workdir，
   //   重新派发给原 worker 续跑（复用原 task_id → runAgent 保留 workflow/dependencies/审点挂链）。
@@ -1602,6 +1823,10 @@ async function handleAsync(name, args) {
     let goal = args.goal || "";
     const wfId = args.workflow_id || title || null;    // 稳定 id：同名/同 id 的调用归并成同一工作流卡片
     let routeReason = null;                            // dynamic 路由理由（上墙进 meta + task description）
+    // 2026-09-23 fix：workflow_start 接受 args.workdir（主仓库绝对路径），
+    //   落到 m.workflows[wfId].workdir，autoDispatchWorkflowStages 用它作为 worker 的授权 read root。
+    //   不传则 fallback BRIDGE_WORK_ROOT（worker 仍锁在 sandbox，但至少能跑）。
+    const wfWorkdir = args.workdir || BRIDGE_WORK_ROOT;
 
     // ── 范式任务编排：把「竞争式/合作式」落成带范式语义的 task DAG ──
     //   每个 task 的 workflow 里多带 paradigm + mode/role 字面量：面板据此分组染色
@@ -1645,7 +1870,7 @@ async function handleAsync(name, args) {
       const fanIds = [], allIds = [];
       updateMem((m) => {
         m.workflows = m.workflows || {};
-        const meta = m.workflows[wfId] || (m.workflows[wfId] = { id: wfId, tpl: "compete", paradigm: "compete", title, created_at: m.workflows[wfId]?.created_at || new Date().toISOString() });
+        const meta = m.workflows[wfId] || (m.workflows[wfId] = { id: wfId, tpl: "compete", paradigm: "compete", title, workdir: wfWorkdir, created_at: m.workflows[wfId]?.created_at || new Date().toISOString() });
         if (routeReason) meta.route_reason = routeReason;   // dynamic 路由理由上墙
         meta.stages = comps.map((c, i) => `#${i + 1} ${c.agent}·${c.view || "方案"}`).concat(["收敛最优"]);
         meta.updated_at = new Date().toISOString();
@@ -1670,7 +1895,7 @@ async function handleAsync(name, args) {
           id: cid,          // 落库带 id
           title: `${title} · ${args.converge_title || "主控交叉比对·收敛最优方案"}`,
           description: `${descPrefix}${goal}\n（竞争式收敛）属于多 Agent 联合评估的最终步骤：交叉比对上面 ${comps.length} 个视角产出，补盲、去重，收敛出唯一最优方案并给出择优理由。`,
-          priority: "high", status: "pending", assigned_to: args.controller || args.converge_agent || null,
+          priority: "high", status: "pending", assigned_to: args.controller || args.converge_agent || (currentControllerAgent && currentControllerAgent()) || "claude",
           deliverable: "收敛方案", acceptance_criteria: "给出一份择优方案 + 落选视角对照",
           require_approval: approveEach, approved_at: null, approver: null, approval_note: null,
           dependencies: fanIds.slice(),
@@ -1678,7 +1903,10 @@ async function handleAsync(name, args) {
         });
         allIds.push(cid);
       });
-      return { content: [{ type: "text", text: `workflow_start(竞争式「评」) [${wfId}] "${title}"\n${comps.map((c, i) => `  ⓘ 视角${i + 1} ${c.agent}="${c.view || "方案"}" (并行)`).join("\n")}\n  ➜ 主控收敛 "${args.converge_title || "收敛最优方案"}"（依赖全部视角）\n面板将展示「评」并行簇 + 收敛汇聚。范式=compete(竞争式)${routeReason ? "\n🧭 " + routeReason : ""}` }] };
+      // 2026-09-23 fix：workflow_start 返回前自动派发有 assigned_to 的可执行 stage，
+      //   fire-and-forget 让 worker claim/run，不再让 caller 手动调 agent_invoke。
+      const dInfo = autoDispatchWorkflowStages(wfId);
+      return { content: [{ type: "text", text: `workflow_start(竞争式「评」) [${wfId}] "${title}"\n${comps.map((c, i) => `  ⓘ 视角${i + 1} ${c.agent}="${c.view || "方案"}" (并行)`).join("\n")}\n  ➜ 主控收敛 "${args.converge_title || "收敛最优方案"}"（依赖全部视角）\n面板将展示「评」并行簇 + 收敛汇聚。范式=compete(竞争式)${routeReason ? "\n🧭 " + routeReason : ""}\n自动派发: ${dInfo.dispatched} 个 stage 已 spawn worker${dInfo.skipped ? `（${dInfo.skipped} 个因依赖未满足留待）` : ""}` }] };
     }
 
     // ② 合作式「做」：设计→实施→审核，审核者与实施者分离（写的人≠查的人）
@@ -1698,7 +1926,7 @@ async function handleAsync(name, args) {
       const ids = [];
       updateMem((m) => {
         m.workflows = m.workflows || {};
-        const meta = m.workflows[wfId] || (m.workflows[wfId] = { id: wfId, tpl: "collaborate", paradigm: "collaborate", title, created_at: m.workflows[wfId]?.created_at || new Date().toISOString() });
+        const meta = m.workflows[wfId] || (m.workflows[wfId] = { id: wfId, tpl: "collaborate", paradigm: "collaborate", title, workdir: wfWorkdir, created_at: m.workflows[wfId]?.created_at || new Date().toISOString() });
         if (routeReason) meta.route_reason = routeReason;   // dynamic 路由理由上墙
         meta.stages = steps.map((s) => `${s.label}（${s.who}）`);
         meta.updated_at = new Date().toISOString();
@@ -1718,7 +1946,9 @@ async function handleAsync(name, args) {
           ids.push(pid);
         }
       });
-      return { content: [{ type: "text", text: `workflow_start(合作式「做」) [${wfId}] "${title}"\n  ${steps.map((s, i) => `→ ${s.label}（${s.who}）`).join(" ")}\n设计-实施-审核 三段链，实施与审核分离。面板展示「做」三明治步进器。${routeReason ? "\n🧭 " + routeReason : ""}` }] };
+      // 2026-09-23 fix：自动派发有 assigned_to 的可执行 stage（同步版返回计数）。
+      const dInfo = autoDispatchWorkflowStages(wfId);
+      return { content: [{ type: "text", text: `workflow_start(合作式「做」) [${wfId}] "${title}"\n  ${steps.map((s, i) => `→ ${s.label}（${s.who}）`).join(" ")}\n设计-实施-审核 三段链，实施与审核分离。面板展示「做」三明治步进器。${routeReason ? "\n🧭 " + routeReason : ""}\n自动派发: ${dInfo.dispatched} 个 stage 已 spawn worker${dInfo.skipped ? `（${dInfo.skipped} 个因依赖未满足留待）` : ""}` }] };
     }
 
     // ③ 线性阶段链（默认）：bmad / 模板库 / 自定义 stages
@@ -1739,7 +1969,7 @@ async function handleAsync(name, args) {
     updateMem((m) => {
       m.workflows = m.workflows || {};
       // 注册工作流元信息（供面板/桥接消费）
-      const meta = m.workflows[wfId] || (m.workflows[wfId] = { id: wfId, tpl: tmp, title, created_at: m.workflows[wfId]?.created_at || new Date().toISOString() });
+      const meta = m.workflows[wfId] || (m.workflows[wfId] = { id: wfId, tpl: tmp, title, workdir: wfWorkdir, created_at: m.workflows[wfId]?.created_at || new Date().toISOString() });
       meta.stages = stages.map((s) => s.t + (s.parallel ? ` ×${(s.agents || [null]).length}` : ""));
       meta.updated_at = new Date().toISOString();
       for (let i = 0; i < stages.length; i++) {
@@ -1782,7 +2012,9 @@ async function handleAsync(name, args) {
     const flatIds = ids.flat();
     const parallelStages = stages.filter((s) => s.parallel && s.agents && s.agents.length > 1).length;
     const stageSummary = stages.map((s, i) => s.t + (s.parallel && s.agents ? `×${s.agents.length}` : "") + "=" + ids[i].join("|")).join(", ");
-    return { content: [{ type: "text", text: `workflow_start [${wfId || tmp}] "${title}" → ${flatIds.length} 任务 / ${stages.length} 阶段${parallelStages ? `（含 ${parallelStages} 个并行阶段）` : ""}: ${stageSummary}\n依赖: 每阶段依赖上一阶段全部任务; 末阶段即终产物${parallelStages ? "；并行阶段同深度多任务共享前置" : ""}。面板「当前工作流」会展示此卡。"` }] };
+    // 2026-09-23 fix：自动派发可执行 stage（首段没有 dep，自动满足）。
+    const dInfo = autoDispatchWorkflowStages(wfId);
+    return { content: [{ type: "text", text: `workflow_start [${wfId || tmp}] "${title}" → ${flatIds.length} 任务 / ${stages.length} 阶段${parallelStages ? `（含 ${parallelStages} 个并行阶段）` : ""}: ${stageSummary}\n依赖: 每阶段依赖上一阶段全部任务; 末阶段即终产物${parallelStages ? "；并行阶段同深度多任务共享前置" : ""}。面板「当前工作流」会展示此卡。\n自动派发: ${dInfo.dispatched} 个 stage 已 spawn worker${dInfo.skipped ? `（${dInfo.skipped} 个因依赖未满足留待）` : ""}` }] };
   }
 
   //  【自适应重规划引擎】（2026-08-28）：单一入口封装四演进 + 服务端强制护栏。
@@ -2324,22 +2556,30 @@ async function handleAsync(name, args) {
   if (name === "agent_invoke") return (async () => {
     const ctl = currentControllerAgent();
     let wanted = args.name;
-    const isControllerDefault = (!wanted || (ctl && String(wanted).toLowerCase() === ctl)) && args.same_worker !== true;
+    // 2026-09-23 fix: 「指定 name==主控」≠ 「未指定」—— 用户明确要主控干，就该派主控，
+    // 不再被默认 worker 池顶替（之前会改派给空闲 dsh/opencode，造成「明明传了 claude 却派 dsh」）。
+    // 只有完全没传 name 才走默认 worker 池。same_worker:true 仍可强制同名（原有语义不变）。
+    const isControllerDefault = !wanted && args.same_worker !== true;
     if (isControllerDefault) {
-      // 未指定 worker / 指定=主控：不压 main，从空闲池轮询一个（排主控），全忙回退主控（尽力）。
+      // 未指定 worker：不压 main，从空闲池轮询一个（排主控），全忙回退主控（尽力）。
       const target = pickIdleWorker(ctl ? [ctl] : [], busyWorkerSet()) || ctl || "qwen";
+      attachAdHocWorkflow(args, target); // 2026-09-23：单派发也挂 ad-hoc workflow 卡
       const r = await runAgent(target, args);
       if (r && r.content && r.content[0]) {
-        r.content[0].text = `[agent_invoke 默认worker] 未指定/主控 → 空闲 ${target}\n${r.content[0].text}`;
+        r.content[0].text = `[agent_invoke 默认worker] 未指定 → 空闲 ${target}\n${r.content[0].text}`;
       }
       return r;
     }
-    if (!AGENTS[wanted]) return runAgent(wanted, args); // 未知 agent → 原样派发（保留原有报错路径）
+    if (!AGENTS[wanted]) {
+      attachAdHocWorkflow(args, wanted); // 未知 agent 也建卡（失败也有面板痕迹）
+      return runAgent(wanted, args); // 未知 agent → 原样派发（保留原有报错路径）
+    }
     const allowFallback = args.same_worker !== true && args.auto_fallback !== false;
     const wantedLower = String(wanted).toLowerCase();
     if (allowFallback && busyWorkerSet().has(wantedLower)) {
       const target = pickInvokeWorker(wanted);
       if (target && target !== wanted) {
+        attachAdHocWorkflow(args, target); // 备路改派也建卡（target 名落库）
         const r = await runAgent(target, args);
         if (r && r.content && r.content[0]) {
           r.content[0].text = `[agent_invoke 备路] ${wanted} busy → 改派空闲 ${target}\n${r.content[0].text}`;
@@ -2347,6 +2587,7 @@ async function handleAsync(name, args) {
         return r;
       }
     }
+    attachAdHocWorkflow(args, wanted); // 主路径：caller 要哪个就建哪个 agent 的卡
     return runAgent(wanted, args);
   })();
 

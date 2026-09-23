@@ -459,14 +459,21 @@ export const AGENTS = {
   dsh: {
     name: "dsh",
     buildFresh: (a) => {
-      const c = ["node", `"${DSH_BIN}"`, "--profile", "headless"];
-      if (DSH_PATCH) c.push("--patch", `"${DSH_PATCH}"`);
+      // 2026-09-23 fix：DSH CLI 在 Windows 上是 .cmd 脚本（@deepseek-ai/dsh 生成器目录下的 dsh.cmd），
+      //   它内部用 ELECTRON_RUN_AS_NODE=1 启动 DSH Desktop.exe 作 node 运行时跑 desktop-cli.js。
+      //   之前 ["node", "dsh.cmd", ...] + shell:true + cwd=sandbox → Windows shell 把第一段当
+      //   "node" 启动命令，node 把 cwd 下的 "dsh" 当 require 模块名解析 →
+      //   「Cannot find module 'C:\...\workroot\task-XXX\dsh'」spawn 失败。
+      //   修正：直接以绝对 .cmd 路径 spawn dsh.cmd，不加 node 前缀，不依赖 PATH。
+      //   shell:true 让 Windows 自动跑 .cmd 脚本；DSH_BIN 应是绝对 .cmd 路径。
+      const c = [DSH_BIN, "--profile", "headless"];
+      if (DSH_PATCH) c.push("--patch", DSH_PATCH);
       c.push(a.prompt);
       return c;
     },
     buildResume: (a) => {
-      const c = ["node", `"${DSH_BIN}"`, "--profile", "headless"];
-      if (DSH_PATCH) c.push("--patch", `"${DSH_PATCH}"`);
+      const c = [DSH_BIN, "--profile", "headless"];
+      if (DSH_PATCH) c.push("--patch", DSH_PATCH);
       c.push(a.prompt);
       return c;
     },
