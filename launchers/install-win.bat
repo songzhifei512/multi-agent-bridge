@@ -1,146 +1,311 @@
 @echo off
-REM ============================================================================
-REM multi-agent-bridge分发包 —— Windows安装向导（交互式）
-REM分发版 v1.0.0 ·通用 ·可选择性注册 worker
-REM
-REM特性：
-REM - %~dp0实时解析本地安装位，不改全局 PATH、不写死绝对路径
-REM -探测已装 worker CLI（claude/codex/qwen/opencode/dsh），缺失可选择跳过
-REM -私有配置（token/端点）交互式写入 %USERPROFILE%\.agents\.env，不入包、不进仓库
-REM -可选向量记忆层按需补齐（默认纯文本）
-REM ============================================================================
+chcp 65001 >nul
 setlocal enabledelayedexpansion
-cd /d "%~dp0"
+
+REM Resolve project root (parent of launchers\ dir)
+cd /d "%~dp0.."
+set "PROJECT_ROOT=%cd%"
+
+REM ---- 0. AUTO_YES support ----
+REM If AUTO_YES=1 is set in the environment (or the user passes --yes flag),
+REM every interactive prompt defaults to y and the script runs to completion.
+REM Useful for CI / first-time installs / re-runs.
+if /i "%AUTO_YES%"=="1" goto :auto_yes_set
+if /i "%AUTO_YES%"=="true" goto :auto_yes_set
+if /i "%1"=="--yes" goto :auto_yes_set
+if /i "%1"=="/y" goto :auto_yes_set
+goto :auto_yes_done
+:auto_yes_set
+set AUTO_YES=1
+echo [AUTO_YES=1] All prompts will default to y; script will run to completion.
+:auto_yes_done
 
 echo.
-echo ============================================================================
-echo multi-agent-bridge ^|分发包 v1.0.0安装向导 ^| Windows
-echo ============================================================================
+echo ============================================================
+echo   multi-agent-bridge  ^|  Windows Install Wizard  v1.0.1
+echo ============================================================
 echo.
 
-REM ----前置检查：node ----
-where node >nul2>&1
-if errorlevel1 (
-  echo [X]未检测到 node。请先安装 Node.js18+（https://nodejs.org）后重跑本向导。
+REM ---- Check node ----
+where node >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Node.js not found. Please install Node.js 18+ first.
+  echo         Download: https://nodejs.org
   pause
-  exit /b1
+  exit /b 1
 )
 for /f "delims=" %%N in ('node --version') do set NODEV=%%N
 echo [OK] node %NODEV%
 
-REM ----1.探测 worker CLI（调用 probe） ----
+REM ---- 1. Probe worker CLI ----
 echo.
-echo ----探测本机 worker CLI（可选择性安装/跳过） ----
-node "%~dp0scripts\probe-cli.mjs"2>nul
-if not errorlevel1 echo [说明]缺项均为「可选」，控制主控不依赖其中任意单个。
-echo [提示]一键安装所有 worker: powershell -ExecutionPolicy Bypass -File ..\public-install\scripts\install-all-workers.ps1
-
-REM ----2.路径确认 ----
-echo.
-echo ----安装位置 ----
-echo当前解包目录： "%~dp0"
-echo将以此目录为 bridge根（%CD%）。移动安装包会导致 MCP注册失效，请先解压到最终位置再运行。
-set /p CONFIRM=确认使用该目录安装？(y/N):
-if /i not "%CONFIRM%"=="y" (
-  echo [X]已取消。请解压到最终目录后重跑。
-  exit /b1
+echo ---- Detecting worker CLI ----
+if exist "%PROJECT_ROOT%\scripts\probe-cli.mjs" (
+  node "%PROJECT_ROOT%\scripts\probe-cli.mjs"
+  echo [INFO] Missing workers are optional, not required for core function.
+) else (
+  echo [WARN] scripts\probe-cli.mjs not found, skipping probe.
 )
 
-REM ----3.私有配置（写入 %USERPROFILE%\.agents\.env，不入包） ----
+REM ---- 2. Confirm install path ----
+echo.
+echo ---- Install location ----
+echo Path: "%PROJECT_ROOT%"
+echo This directory will be the bridge root. Moving it later breaks MCP registration.
+echo.
+set CONFIRM=n
+if "%AUTO_YES%"=="1" set CONFIRM=y
+set /p CONFIRM=Confirm using this directory? (y/N): 
+if /i not "%CONFIRM%"=="y" (
+  echo [Cancelled] Please move the package to final location first.
+  pause
+  exit /b 1
+)
+
+REM ---- 3. Private config (.env) ----
 set ENV_FILE=%USERPROFILE%\.agents\.env
 if not exist "%USERPROFILE%\.agents" mkdir "%USERPROFILE%\.agents"
 
 echo.
-echo ----私有配置（端点 + token，将写入 %ENV_FILE%） ----
-echo [提示]以下输入仅写入你的个人配置目录，不会进入分发包/仓库。
-echo [说明]默认使用 Anthropic官方云端点 (https://api.anthropic.com)
-echo [提示]如需使用其他 provider，可后续手动编辑 %ENV_FILE%
+echo ---- Private config (endpoint + token) ----
+echo Config will be written to: %ENV_FILE%
+echo Default endpoint: https://api.anthropic.com
+echo (You can edit the file later to change provider)
 echo.
 
-REM检查是否已有配置
-if exist "%ENV_FILE%" findstr /r /b "ANTHROPIC_BASE_URL=" "%ENV_FILE%" >nul2>&1 (
-  echo [保留]检测到既有 ANTHROPIC_BASE_URL，未覆盖你的旧配置。手动编辑 %ENV_FILE%即可变更。
-) else (
-  set ENDPOINT_URL=https://api.anthropic.com
-  echo ANTHROPIC_BASE_URL: %ENDPOINT_URL%
-  set /p AUTH= ANTHROPIC_AUTH_TOKEN (必填，从 https://console.anthropic.com获取):
-  if not defined AUTH (
-    echo [警告]未提供 API Token。bridge将无法工作。请后续手动编辑 %ENV_FILE%
-    set AUTH=^<YOUR_ANTHROPIC_API_KEY^>
+set HAS_CONFIG=0
+if exist "%ENV_FILE%" (
+  findstr /b "ANTHROPIC_BASE_URL=" "%ENV_FILE%" >nul 2>&1
+  if not errorlevel 1 (
+    echo [Keep] Existing ANTHROPIC_BASE_URL found, not overwritten.
+    set HAS_CONFIG=1
   )
-  (
-    echo ANTHROPIC_BASE_URL=%ENDPOINT_URL%
-    echo ANTHROPIC_AUTH_TOKEN=%AUTH%
-    echo BRIDGE_CONTROLLER=claude
-  )>>"%ENV_FILE%"
-  echo [OK]已写入 %ENV_FILE%
+)
+if "%HAS_CONFIG%"=="0" goto :config_new
+echo [Keep] Existing ANTHROPIC_BASE_URL found, not overwritten.
+goto :config_done
+
+:config_new
+set ENDPOINT_URL=https://api.anthropic.com
+echo Endpoint: %ENDPOINT_URL%
+set AUTH=
+if "%AUTO_YES%"=="1" goto :config_skip_token_prompt
+set /p AUTH=  ANTHROPIC_AUTH_TOKEN (required, from https://console.anthropic.com): 
+:config_skip_token_prompt 
+if defined AUTH goto :config_write
+echo [WARN] No API token provided. Bridge won't work. Edit %ENV_FILE% later.
+set AUTH=^<YOUR_ANTHROPIC_API_KEY^>
+
+:config_write
+(
+  echo ANTHROPIC_BASE_URL=%ENDPOINT_URL%
+  echo ANTHROPIC_AUTH_TOKEN=%AUTH%
+  echo BRIDGE_CONTROLLER=claude
+)>>"%ENV_FILE%"
+echo [OK] Written to %ENV_FILE%
+
+:config_done
+
+REM ---- 4. MCP registration guide ----
+echo.
+echo ---- MCP Registration ----
+set SERVER_PATH=%PROJECT_ROOT%\bridge\mcp\shared-context-server.mjs
+echo Add this MCP server to your CLI config:
+echo.
+echo   name:    shared-context
+echo   command: node
+echo   args:    ["%SERVER_PATH%"]
+echo.
+echo (Full example: %PROJECT_ROOT%\config\claude-mcp-config.json.tmpl)
+
+REM Check installed CLIs
+where claude >nul 2>&1
+if not errorlevel 1 (
+  echo.
+  echo [Claude] Detected. Config: %USERPROFILE%\.claude.json
+)
+where codex >nul 2>&1
+if not errorlevel 1 (
+  echo.
+  echo [Codex] Detected. Config: %USERPROFILE%\.codex\config.toml
 )
 
-REM ----4.注册 MCP（把 %~dp0绝对路径写入各 CLI配置） ----
+REM ---- 4.5 DSH Sidebar Panel (auto-install) ----
 echo.
-echo ----注册 MCP到已装 CLI ----
-set BRIDGE_DIR=%~dp0bridge
-REM Claude的 .mcp.json
-set CMAIN=%USERPROFILE%\.claude.json
-if exist "%CMAIN%" (
-  echo [Claude]检测到 ~/.claude.json。手动把以下 server加入 mcpServers，或：
-)
-echo (向导简化：请在 %CMAIN%的 mcpServers加入 shared-context，command=node, args=["%BRIDGE_DIR%\mcp\shared-context-server.mjs"])
-echo （完整示例见 config\claude-mcp-config.json.tmpl，脚本占位 %BRIDGE_DIR%已换算为上述绝对路径）
+echo ---- DSH Sidebar Panel ----
+set DSH_ROOT=%USERPROFILE%\.dsh
+set DSH_PLUGINS=%DSH_ROOT%\plugins
+set PANEL_SRC=%PROJECT_ROOT%\dsh-panel
+set PANEL_NAME=dsh-bridge-panel
+set PANEL_LINK=%DSH_PLUGINS%\%PANEL_NAME%
+set DSH_DESKTOP_PROFILE=%DSH_ROOT%\profiles\desktop
 
-REM ----4.5 技能软链（把 multi-agent 技能链接到各 CLI 技能根，可选）----
+if not exist "%DSH_ROOT%" goto :dsh_skip_notfound
+if not exist "%PANEL_SRC%\dist\index.js" goto :dsh_skip_notbuilt
+
+echo [DSH] DSH detected at %DSH_ROOT%
+
+REM Check if already installed as plugin
+if exist "%PANEL_LINK%" goto :dsh_skip_installed
+
+REM Ask user (default: yes)
 echo.
-echo ----技能软链（可选：让 claude/codex/DSH 识别 multi-agent 技能）----
-set "SKILL_SRC=%~dp0..\skills\multi-agent"
-if not exist "%SKILL_SRC%\SKILL.md" (
-  echo [提示]未发现技能包 skills\multi-agent，跳过。
-  goto :skill_done
+set INSTALL_PANEL=y
+if "%AUTO_YES%"=="1" goto :install_panel_done
+set /p INSTALL_PANEL=Install DSH sidebar panel? (Y/n): 
+:install_panel_done
+if /i "%INSTALL_PANEL%"=="n" goto :dsh_done
+
+REM Create plugins dir if needed
+if not exist "%DSH_PLUGINS%" mkdir "%DSH_PLUGINS%"
+
+REM Create junction (no admin rights needed on Windows for junctions)
+mklink /J "%PANEL_LINK%" "%PANEL_SRC%" >nul 2>&1
+if not errorlevel 1 goto :dsh_install_ok
+
+REM Junction failed - fall back to copy (skip node_modules and .git)
+echo [INFO] Junction not available, copying files instead...
+xcopy /e /i /y "%PANEL_SRC%" "%PANEL_LINK%" /EXCLUDE:%PROJECT_ROOT%\launchers\dsh-copy-exclude.txt >nul 2>&1
+if errorlevel 1 goto :dsh_install_failed
+
+:dsh_install_ok
+echo [OK] DSH panel installed: %PANEL_LINK%
+goto :dsh_profile_check
+
+:dsh_install_failed
+echo [ERROR] Failed to install DSH panel.
+echo         Try manually: node "%PANEL_SRC%\link-dev.mjs"
+goto :dsh_done
+
+:dsh_skip_notfound
+echo [SKIP] DSH not detected (%DSH_ROOT% not found).
+echo        Install DSH Desktop first, then re-run this wizard.
+goto :dsh_done
+
+:dsh_skip_notbuilt
+echo [SKIP] dsh-panel not built (dist/index.js missing).
+echo        Run "cd dsh-panel && npm install && npm run build" first.
+goto :dsh_done
+
+:dsh_skip_installed
+echo [SKIP] Already installed: %PANEL_LINK%
+REM Fall through to profile check
+
+:dsh_profile_check
+REM ---- 4.6 DSH profile registration ----
+if not exist "%DSH_DESKTOP_PROFILE%" goto :dsh_done
+
+set PROFILE_PKG=%DSH_DESKTOP_PROFILE%\package.json
+set PROFILE_PATCH=%DSH_DESKTOP_PROFILE%\cordis.patch.yml
+set PANEL_PKG=%PANEL_SRC%\package.json
+
+echo.
+echo ---- Registering dsh-bridge-panel into DSH desktop profile ----
+echo Profile: %DSH_DESKTOP_PROFILE%
+
+REM Verify panel package exposes patch export
+findstr /c:"./cordis.patch.yml" "%PANEL_PKG%" >nul 2>&1
+if errorlevel 1 (
+  echo [WARN] %PANEL_PKG% does not expose ./cordis.patch.yml export.
 )
-for %%R in ("%USERPROFILE%\.claude\skills" "%USERPROFILE%\.codex\skills" "%USERPROFILE%\.agents\skills") do call :link_skill "%%~R"
+
+REM (b) mutate profile/package.json: dependencies + bundles
+set "LINK_PATH=%PANEL_SRC:\=\\%"
+node "%PROJECT_ROOT%\scripts\install-dsh-profile.mjs" --profile "%DSH_DESKTOP_PROFILE%" --panel-pkg "%PANEL_PKG%" --link "%LINK_PATH%"
+if not errorlevel 1 goto :dsh_profile_pkg_ok
+echo [WARN] profile/package.json edit failed; sidebar activation incomplete.
+goto :dsh_done
+:dsh_profile_pkg_ok
+echo [OK] profile dependencies + bundles updated.
+
+REM (c) merge panel patch into profile cordis.patch.yml if missing
+node "%PROJECT_ROOT%\scripts\merge-dsh-patch.mjs" "%PROFILE_PATCH%" "%PANEL_SRC%\cordis.patch.yml"
+if not errorlevel 1 goto :dsh_profile_patch_ok
+echo [WARN] cordis.patch.yml merge failed.
+goto :dsh_done
+:dsh_profile_patch_ok
+echo [OK] profile cordis.patch.yml ready.
+echo      Restart DSH Desktop to see the sidebar panel.
+
+:dsh_done
+
+REM ---- 5. Skill installation (copy, not symlink - no admin needed) ----
+echo.
+echo ---- Skill installation ----
+set "SKILL_SRC=%PROJECT_ROOT%\skills\multi-agent"
+if exist "%SKILL_SRC%\SKILL.md" goto :skill_install_start
+echo [SKIP] skills\multi-agent not found, skipping.
+goto :skill_done
+:skill_install_start
+
+call :install_skill "%USERPROFILE%\.claude\skills"
+call :install_skill "%USERPROFILE%\.codex\skills"
+call :install_skill "%USERPROFILE%\.agents\skills"
 goto :skill_done
 
-:link_skill
-set "LINK_PATH=%~1\multi-agent"
-if exist "%LINK_PATH%" (
-  echo [跳过]已存在：%LINK_PATH%
-  goto :eof
-)
+:install_skill
+set "DEST=%~1\multi-agent"
+if not exist "%DEST%" goto :install_skill_do
+echo [SKIP] Already exists: %DEST%
+goto :eof
+:install_skill_do
 if not exist "%~1" mkdir "%~1"
-mklink /J "%LINK_PATH%" "%SKILL_SRC%" >nul 2>&1
-if errorlevel 1 (
-  echo [提示]软链失败（可手工复制 skills\multi-agent 到 %LINK_PATH%）
-) else (
-  echo [OK]已软链：%SKILL_SRC% ^> %LINK_PATH%
-)
+xcopy /e /i /y "%SKILL_SRC%" "%DEST%" >nul 2>&1
+if not errorlevel 1 goto :install_skill_ok
+echo [WARN] Copy failed. Manually copy skills\multi-agent to %DEST%
+goto :eof
+:install_skill_ok
+echo [OK] Installed: %DEST%
 goto :eof
 
 :skill_done
 
-REM ----5.向量层：先部署包内模型，再探测 ----
+REM ---- 6. Vector layer ----
 echo.
-echo ----向量记忆层（可选） ----
-REM若已下载 MiniLM模型（assets-optional\model-multilingual，见 download-vector-assets.ps1），部署到用户级 ~/.agents/vector/
-if exist "%~dp0..\assets-optional\model-multilingual\model_quantized.onnx" (
-  if not exist "%USERPROFILE%\.agents\vector\model-multilingual" mkdir "%USERPROFILE%\.agents\vector\model-multilingual"
-  copy /y "%~dp0..\assets-optional\model-multilingual\*.onnx" "%USERPROFILE%\.agents\vector\model-multilingual\" >nul2>&1
-  copy /y "%~dp0..\assets-optional\model-multilingual\*.json" "%USERPROFILE%\.agents\vector\model-multilingual\" >nul2>&1
-  echo [OK]已部署向量模型到 %USERPROFILE%\.agents\vector\model-multilingual
-) else (
-  echo [提示]未发现模型。需要语义检索时运行: powershell -ExecutionPolicy Bypass -File assets-optional\download-vector-assets.ps1
-)
-node "%~dp0scripts\probe-vector.mjs" --json2>nul | findstr "vectorLayerReady" | findstr "true" >nul && (
-  echo [OK]向量层已就绪：语义检索可用
-) || (
-  echo [提示]缺原生依赖（onnxruntime-node / sqlite-vec）。按 assets-optional\README.md的 npm install补齐后即启用；否则纯文本兜底，核心功能完整。
+echo ---- Vector memory (optional, gated by VECTOR_ENABLED) ----
+
+REM Probe first (no install) so the user sees the current 4-axis status
+node "%PROJECT_ROOT%\scripts\probe-vector.mjs"
+if errorlevel 1 (
+  echo [WARN] probe failed; continuing without reporting status.
 )
 
-REM ----6.下一步 ----
+set VECTOR_INSTALL=n
+if "%AUTO_YES%"=="1" set VECTOR_INSTALL=y
+set /p VECTOR_INSTALL=Install vector layer (download model + npm onnxruntime-node + sqlite-vec)? (y/N):
+if /i not "%VECTOR_INSTALL%"=="y" goto :vector_done
+
+REM Defer to the cross-platform installer.
+REM We run it WITHOUT --strict because we want success even when partial
+REM (some deps already in place). After install, the next `probe-vector.mjs`
+REM run is the source of truth for the final ENABLED/OFF status.
 echo.
-echo ----下一步 ----
-echo启动桥服务： node "%BRIDGE_DIR%\mcp\shared-context-server.mjs"
-echo面板（可选）： node "%BRIDGE_DIR%\mcp\bridge-web-panel.mjs"
-echo校验已装 CLI： node "%~dp0scripts\probe-cli.mjs"
-echo配置指南：见 public-install\ENV_SETUP.md
+echo [INFO] Calling install-vector-layer.mjs ...
+node "%PROJECT_ROOT%\assets-optional\install-vector-layer.mjs"
+echo [INFO] install-vector-layer exited with code %errorlevel% (non-zero is OK if deps were already present).
+
+:vector_done
 echo.
-echo安装向导完成。
+REM Final summary -- use a simple status check, not multi-stage findstr pipes
+node "%PROJECT_ROOT%\scripts\probe-vector.mjs" --json > "%TEMP%\dsh-vector-final.json" 2>nul
+findstr /c:"\"semanticSearchEnabled\": true" "%TEMP%\dsh-vector-final.json" >nul 2>&1
+if errorlevel 1 (
+  echo [INFO] Semantic search: OFF (text-only fallback active)
+  echo        To enable: run install-vector-layer.ps1, or set VECTOR_ENABLED=1
+) else (
+  echo [OK] Semantic search: ENABLED  (VECTOR_ENABLED=0 to disable)
+)
+del "%TEMP%\dsh-vector-final.json" >nul 2>&1
+
+REM ---- Done ----
+echo.
+echo ============================================================
+echo   Installation complete
+echo ============================================================
+echo.
+echo Verify CLI:   node "%PROJECT_ROOT%\scripts\probe-cli.mjs"
+echo DSH panel:    %DSH_PLUGINS%\%PANEL_NAME%
+echo Troubleshoot: %PROJECT_ROOT%\docs\guides\troubleshooting.md
+echo Quick start:  %PROJECT_ROOT%\README.md
+echo.
 pause

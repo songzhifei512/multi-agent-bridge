@@ -375,6 +375,38 @@ http://localhost:3333
 
 ---
 
+### 7.2.1 报错 "duplicate loader entry id 'dsh-bridge-panel'"
+
+**现象**：DSH 启动时报错 `dsh-plugin-desktop: duplicate loader entry id "dsh-bridge-panel" in the composed profile`，面板无法加载。
+
+**原因**：`dsh-bridge-panel` 被注册了两次。DSH 有两种加载插件的方式，同时使用会冲突：
+
+| 方式 | 说明 | 是否自动注册 |
+|------|------|------------|
+| 插件目录方式 | 放在 `~/.dsh/plugins/` 下 | ✅ DSH 插件系统自动加载 |
+| Profile bundle 方式 | 在 profile 的 `package.json` 中加依赖 | ✅ `dsh.bundle.patch` 中的 insert 自动注册 |
+
+如果同时使用两种方式，或在 profile 的 `cordis.patch.yml` 中又手动 `insert` 了一次，就会报 duplicate id。
+
+**修复方法**：
+
+1. **如果用的是插件目录方式** → 不要在 profile 的 `cordis.patch.yml` 中手动 insert `dsh-bridge-panel`
+2. **如果用的是 profile bundle 方式** → 不要在 `~/.dsh/plugins/` 下放同名插件
+3. **profile 的 `cordis.patch.yml` 如需改配置** → 用 `override` 而非 `insert`：
+   ```yaml
+   - override:
+       - id: dsh-bridge-panel
+         config:
+           port: 3000
+   ```
+
+**快速排查**：检查以下两个位置是否同时存在 `dsh-bridge-panel`：
+- `~/.dsh/plugins/dsh-bridge-panel/`（插件目录）
+- `~/.dsh/profiles/desktop/package.json` 中的 dependencies
+- `~/.dsh/profiles/desktop/cordis.patch.yml` 中是否有手动 insert
+
+---
+
 ### 7.3 面板显示「未连接」
 
 **现象**：dsh-panel 显示连接状态为「未连接」或「离线」。

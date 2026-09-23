@@ -1,0 +1,4 @@
+node_modules\
+.git\
+.superpowers\
+package-lock.json

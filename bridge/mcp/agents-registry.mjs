@@ -92,6 +92,9 @@ const QODER_DEFAULT_MODEL = process.env.QODER_DEFAULT_MODEL || "";
 // 这里显式钉 <PROVIDER>-Medium（用户指定），codex model 名不带 provider 前缀（本地配置统一路由）。
 // CODEX_DEFAULT_MODEL env 可覆盖；fallback 在重试时代入（见 fallbackModels）。
 const CODEX_DEFAULT_MODEL = process.env.CODEX_DEFAULT_MODEL || "<MODEL_MEDIUM>";
+// 2026-09-23：claude 默认 model —— 显式注入不再依赖 settings.json ANTHROPIC_DEFAULT_OPUS_MODEL
+//   （ark-code-latest 端点不被 ClaudeCode SDK 认）。可被 CLAUDE_DEFAULT_MODEL env 覆盖。
+const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL || "<MODEL_MEDIUM>";
 
 // 脱敏占位符检测：公网分发包里模型名用 <PLACEHOLDER> 占位（不含真实名），真实值靠 env 注入。
 // env 未注入时模型名仍是 "<...>" 占位符。Windows shell:true 把命令交给 cmd.exe，占位符里的
@@ -417,9 +420,23 @@ export const AGENTS = {
     // CLAUDE_BIN -p --output-format json [--model M] <prompt>  (--output-format json so session_id is structured)
     // Uses the pinned claude binary (CLAUDE_BIN), not PATH-resolved `claude` — see the
     // CLAUDE_BIN comment above for why PATH resolution is unreliable here.
+    // 2026-09-23 fix：--permission-mode 改用 `bypassPermissions`（不是 acceptEdits）：
+    //   · acceptEdits 只放行 edit 类工具（Edit/Write），bash(Bash)/read/glob 仍需用户确认 ——
+    //     headless 模式没有用户会确认，导致 claude 真跑复杂任务（含 git log / cat / grep）
+    //     被 SDK 拒绝返回 [claude-code:unrecognized_model] 的伪失败（其实是 tool_use 被拒）。
+    //   · bypassPermissions 让所有工具自动通过，符合 multi-agent sandbox 边界
+    //     （worker 在 sandbox 跑、bridge 已控 spawn 范围，无需 SDK 再问一次）。
+    //   · 代价：放弃 claude 自带的工具 confirm UI —— 已知取舍，与 codex 的
+    //     --dangerously-bypass-approvals-and-sandbox 同源。
+    //
+    // 2026-09-23 fix：默认 model 显式注入 CLAUDE_DEFAULT_MODEL（不再依赖 settings.json
+    //   ANTHROPIC_DEFAULT_OPUS_MODEL —— ark-code-latest 端点不被 ClaudeCode SDK 认，
+    //   会回退到 sdk 默认 + warning）。CLAUDE_DEFAULT_MODEL 默认 "<MODEL_AUTO>"，
+    //   与 fallbackModels 池同语义，可被 env 覆盖。
     buildFresh: (a) => {
-      const c = [CLAUDE_BIN, "-p", "--output-format", "json", "--permission-mode", "acceptEdits"];
-      if (a.model) c.push("--model", a.model);
+      const c = [CLAUDE_BIN, "-p", "--output-format", "json", "--permission-mode", "bypassPermissions"];
+      const m = a.model || CLAUDE_DEFAULT_MODEL;
+      if (!isPlaceholderModel(m)) c.push("--model", m);
       // 长 prompt 走 stdin（needsStdin）：Windows argv 会把含空格/中文的长 prompt 拆分截断
       // （实测 claude 只收到首词）。claude -p 无 prompt 参数时自动从 stdin 读完整指令。
       // runOnce 对 needsStdin 的 agent 打开 stdin 写入 args.prompt，故这里不再用 argv 传 prompt。
@@ -427,8 +444,9 @@ export const AGENTS = {
     },
     // CLAUDE_BIN -p --output-format json --resume <id> [--model M] <prompt>
     buildResume: (a) => {
-      const c = [CLAUDE_BIN, "-p", "--output-format", "json", "--permission-mode", "acceptEdits", "--resume", a.session_id];
-      if (a.model) c.push("--model", a.model);
+      const c = [CLAUDE_BIN, "-p", "--output-format", "json", "--permission-mode", "bypassPermissions", "--resume", a.session_id];
+      const m = a.model || CLAUDE_DEFAULT_MODEL;
+      if (!isPlaceholderModel(m)) c.push("--model", m);
       // 同上：resume 也经 stdin 读 prompt（needsStdin）。
       return c;
     },

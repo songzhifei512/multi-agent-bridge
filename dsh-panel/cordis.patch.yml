@@ -1,10 +1,11 @@
-# Bundle patch layer: the row loads the package's main entry as the host half
-# (a plain Cordis plugin); the `dsh.client` declaration makes the web app load
-# its ./client bundle as the browser half.
-- insert:
+# Bundle patch layer: config overrides for the dsh-bridge-panel plugin.
+# NOTE: The plugin itself is auto-loaded by DSH when the package is installed
+# as a dependency. Do NOT insert id: dsh-bridge-panel here — it would cause
+# "duplicate loader entry id" error because the package is already registered.
+# Use this file only for config overrides and dependency injections.
+
+- override:
     - id: dsh-bridge-panel
-      name: dsh-bridge-panel
-      inject: [webServer]
       config:
         autoStart: true
         port: 3000

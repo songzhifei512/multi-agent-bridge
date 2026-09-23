@@ -26,3 +26,12 @@ Thumbs.db
 
 # 临时与清理报告
 *.redact-report.*
+
+# 2026-09-23：本机脱敏/调试产物 + DSH patch 备份不入库
+logs/
+redact-out/
+.dsh-patch-bak-*/
+assets-optional/package-lock.json
+state/
+# 本机脱敏自检脚本（含真实人名/扫描规则，不入库防泄漏给攻击者用作规避参考）
+scripts/security-scan.mjs

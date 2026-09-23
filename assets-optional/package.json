@@ -1,0 +1,1 @@
+{"name":"vector-assets","private":true,"dependencies":{"onnxruntime-node":"^1.30.0","sqlite-vec":"^0.1.9"}}
