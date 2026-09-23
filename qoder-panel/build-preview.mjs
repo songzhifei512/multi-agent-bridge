@@ -35,6 +35,19 @@ const result = await esbuild.build({
 
 const js = result.outputFiles[0].text;
 
+/* 把 esbuild 产物塞进 HTML <script> 之前必须做的 4 个转义:
+ *   </script>  → <\/script>  防浏览器解析时提前关 script
+ *   <!--       → <\!--       防 HTML 注释闭合污染
+ *   ${         → \${         防模板字符串自身二次插值
+ *   \r         → \\r         跨平台 CR/LF 收敛(只产 LF)
+ * bundle 跨大版本可能引入新关键字,replace 兜底是必要的;产出 jsEscaped,
+ * html 模板字符串里只用它。 */
+const jsEscaped = js
+  .replace(/<\/script/gi, '<\\/script')
+  .replace(/<!--/g, '<\\!--')
+  .replace(/\$\{/g, '\\${')
+  .replace(/\r/g, '\\r');
+
 /* markdown 渲染器输出的类名样式 + 页面外壳（预览专用，非 webview 环境无 CSP 限制） */
 const css = `
 html,body{margin:0;padding:0;background:#0a0a0f;}
@@ -81,7 +94,7 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
 <div id="root"></div>
-<script>${js}</script>
+<script>${jsEscaped}</script>
 </body>
 </html>`;
 
