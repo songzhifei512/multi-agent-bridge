@@ -3,8 +3,8 @@ const CSS = `
   /* 暗色主题（默认） */
   --bg:#0a0a0f; --card:#12121a; --hover:#1a1a26;
   --border:#1e1e2e; --border2:#2a2a3e;
-  --txt:#e4e4ed; --mut:#6b6b80; --dim:#44445a;
-  --acc:#6366f1; --ok:#22c55e; --run:#3b82f6; --pend:#eab308; --err:#ef4444;
+  --txt:#e4e4ed; --mut:#8b8b9e; --dim:#7d7d94;
+  --acc:#6366f1; --ok:#22c55e; --run:#3b82f6; --pend:#eab308; --warn:#f59e0b; --warn-border:rgba(245,158,11,.45); --err:#ef4444;
   --overlay-bg:rgba(5,5,10,.7);
   --shadow-panel:0 0 60px rgba(99,102,241,.06), 0 0 0 1px rgba(255,255,255,.03) inset;
   --fab-shadow:0 4px 16px rgba(99,102,241,.35);
@@ -12,18 +12,22 @@ const CSS = `
   --dag-node-fill:#12121a; --dag-edge:#44445a;
   --dag-text-done:#6b6b80; --dag-text-active:#e4e4ed;
   --toast-bg:rgba(34,197,94,.12); --toast-border:rgba(34,197,94,.3); --toast-color:#86efac;
+  --arch:#fbbf24; --restore:#86efac;
+  --arch-border:rgba(245,158,11,.5); --arch-bg:rgba(245,158,11,.13);
+  --restore-border:rgba(34,197,94,.5); --restore-bg:rgba(34,197,94,.13);
   --radius:10px; --radius-sm:6px;
   color-scheme:dark;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
   background:var(--bg); color:var(--txt);
   height:100%; display:flex; flex-direction:column; font-size:13px; line-height:1.45;
+  position:relative; /* FAB/遮罩/Toast 的锚定层（悬浮件挂在 root 而非滚动 body） */
   transition:background .3s, color .3s;
 }
 .ma-root[data-theme="light"]{
   --bg:#f5f6fa; --card:#ffffff; --hover:#eef0f5;
   --border:#e2e4ea; --border2:#d0d3dc;
   --txt:#1a1a2e; --mut:#6b7080; --dim:#9ca0ad;
-  --acc:#4f46e5; --ok:#16a34a; --run:#2563eb; --pend:#ca8a04; --err:#dc2626;
+  --acc:#4f46e5; --ok:#16a34a; --run:#2563eb; --pend:#ca8a04; --warn:#d97706; --warn-border:rgba(217,119,6,.45); --err:#dc2626;
   --overlay-bg:rgba(0,0,0,.3);
   --shadow-panel:0 1px 3px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.04) inset;
   --fab-shadow:0 4px 12px rgba(79,70,229,.25);
@@ -31,6 +35,9 @@ const CSS = `
   --dag-node-fill:#ffffff; --dag-edge:#c0c4d0;
   --dag-text-done:#9ca0ad; --dag-text-active:#1a1a2e;
   --toast-bg:rgba(22,163,74,.1); --toast-border:rgba(22,163,74,.3); --toast-color:#16a34a;
+  --arch:#b45309; --restore:#15803d;
+  --arch-border:rgba(180,83,9,.5); --arch-bg:rgba(180,83,9,.1);
+  --restore-border:rgba(21,128,61,.5); --restore-bg:rgba(21,128,61,.1);
   color-scheme:light;
 }
 
