@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { AGENTS, envStrip, execOnPath, cleanProcessEnv } from "./agents-registry.mjs";
 import { isRetryableExit, isFakeSuccess, safetyScan, parseRetryAfter, sleep } from "./retry-safety.mjs";
 import { updateMem, loadMem, BRIDGE_WORK_ROOT, resolveInWorkDir, generateTaskId } from "./state-store.mjs";
+import { autoDispatchWorkflowStages } from "./shared-context-server.mjs";
 
 const IS_WIN = process.platform === "win32";
 
@@ -249,8 +250,11 @@ export function runAgent(name, args, opts = {}) {
       timeout_sec: args.timeout_sec || 300,  // 短任务卡顿阈值分层用（sweepStaleRunning 据此缩短 stale 阈值）
       progress_log: prev.progress_log || [],  // 保留既有进度留痕
       escalation: null,
-      // 跨重跑保留工作流/审点挂链（auto-fork 判断归属 + DAG 面板不丢边）：
-      workflow: prev.workflow || null,
+      // 跨重跑保留工作流/审点挂链（auto-fork 判断归属 + DAG 面板不丢边）。
+      // 2026-09-23 fix：args.workflow_meta 入口允许 caller（agent_invoke/run_*）给单派发 task
+      //   也挂上 workflow 挂链。prev.workflow 优先（重跑保留），再回退到 args.workflow_meta，
+      //   这样 ad-hoc 单派发 agent_invoke 也能在面板「当前工作流」看到一张独立卡而不是孤儿 task。
+      workflow: prev.workflow || (args.workflow_meta && typeof args.workflow_meta === "object" ? args.workflow_meta : null),
       dependencies: prev.dependencies || [],
       deliverable: prev.deliverable || null,
       acceptance_criteria: prev.acceptance_criteria || null,
@@ -419,6 +423,16 @@ export function runAgent(name, args, opts = {}) {
       if (finalSessionId) m.tasks[taskId].session_id = finalSessionId;
       m.tasks[taskId].retries = attempts;
     });
+    // 2026-09-23 fix：worker 跑完 status=completed 时触发跨 workflow 的"dep 满足即派发"sweep。
+    //   收敛/中段 task 的 dep 刚满足时没人 trigger——把 dispatch 钩到每次 worker 完成时保证 DAG 自动推进。
+    //   run-driver 和 shared-context-server 在同一进程，直接调函数做内联 sweep，
+    //   不引入循环依赖也不依赖 bus。bus 路径留 task_complete handler 兜底。
+    if (success && !autoRefused && !wasInterrupted && typeof autoDispatchWorkflowStages === "function") {
+      try {
+        const allWfIds = Object.keys(loadMem().workflows || {});
+        for (const wfId2 of allWfIds) autoDispatchWorkflowStages(wfId2);
+      } catch (e) { /* fire-and-forget */ }
+    }
     //  自适应重规划 A：失败自动 fork（机械触发）。真失败（非 auto_refused，后者需人工回落）
     // 且调用方显式 fork_on_fail=<备选agent> 时，把失败任务父标记 superseded、生成备选子任务承接，
     // 让工作流不中断。仅对【属于工作流】的任务生效（须有 m.workflows[wfId].evolve 计数，≤3 上限对齐引擎）。
