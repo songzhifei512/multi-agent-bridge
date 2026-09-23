@@ -35,3 +35,4 @@ assets-optional/package-lock.json
 state/
 # 本机脱敏自检脚本（含真实人名/扫描规则，不入库防泄漏给攻击者用作规避参考）
 scripts/security-scan.mjs
+scripts/redact-audit.mjs
